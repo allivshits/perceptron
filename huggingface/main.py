@@ -17,7 +17,7 @@ import torch
 from PIL import Image as PILImage
 from PIL import ImageDraw, ImageFont
 import base64
-from transformers import AutoTokenizer, AutoConfig, AutoModelForCausalLM
+from transformers import AutoProcessor, AutoConfig, AutoModelForCausalLM
 from loguru import logger
 
 # Prefer local repo package over any site-installed "perceptron"
@@ -29,7 +29,6 @@ if REPO_ROOT not in sys.path:
 
 from perceptron.tensorstream import VisionType
 from perceptron.tensorstream.ops import tensor_stream_token_view, modality_mask
-from huggingface.modular_isaac import IsaacProcessor, IsaacForConditionalGeneration
 from perceptron.pointing.parser import extract_points
 
 
@@ -195,9 +194,8 @@ def main():
 
     # Load processor and config from the HF checkpoint
     logger.info(f"Loading processor and config from HF checkpoint: {hf_path}")
-    tokenizer = AutoTokenizer.from_pretrained(hf_path, trust_remote_code=True, use_fast=False)
     config = AutoConfig.from_pretrained(hf_path, trust_remote_code=True)
-    processor = IsaacProcessor(tokenizer=tokenizer, config=config)
+    processor = AutoProcessor.from_pretrained(hf_path, trust_remote_code=True)
 
     # Load model from the HF checkpoint using AutoModelForCausalLM
     logger.info(f"Loading AutoModelForCausalLM from HF checkpoint: {hf_path}")
