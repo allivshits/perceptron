@@ -201,8 +201,7 @@ def main():
 
     # Load model from the HF checkpoint using AutoModelForCausalLM
     logger.info(f"Loading AutoModelForCausalLM from HF checkpoint: {hf_path}")
-    model = IsaacForConditionalGeneration.from_pretrained(hf_path, trust_remote_code=True, attn_implementation="sdpa", vision_attn_implementation="sdpa")
-
+    model = AutoModelForCausalLM.from_pretrained(hf_path, trust_remote_code=True, vision_attn_implementation="flash_attention_2")
 
     # Move to appropriate device and dtype
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
