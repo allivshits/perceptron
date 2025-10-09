@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any, Union, TypedDict
+from typing import Any, TypedDict
 
 import math
 import numpy as np
@@ -79,6 +79,91 @@ def create_cumulative_seq_lengths(seq_sizes: torch.Tensor, device: torch.device)
     cu_seqlens[1:] = seq_sizes.cumsum(0)
     max_seqlen = int(seq_sizes.max().item()) if len(seq_sizes) > 0 else 0
     return cu_seqlens, max_seqlen
+
+
+def _max_from_cu(cu: torch.Tensor | None, fallback: int) -> int:
+    """Helper to compute max sequence length from cumulative sequence lengths."""
+    if cu is None or len(cu) < 2:
+        return fallback
+    return int((cu[1:] - cu[:-1]).max().item())
+
+
+def flash_attention_document_mask_forward(
+    q_lhd: torch.Tensor,  # (L, H, D)
+    k_lhd: torch.Tensor,  # (L, H, D)
+    v_lhd: torch.Tensor,  # (L, H, D)
+    attention_mask: torch.Tensor | None = None,  # unused for FA path
+    dropout: float = 0.0,
+    scaling: float | None = None,
+    cum_seq_q: torch.Tensor | None = None,
+    cum_seq_k: torch.Tensor | None = None,
+    max_seqlen: int | None = None,
+    is_causal: bool = False,
+    **kwargs,
+) -> tuple[torch.Tensor, None]:
+    """FlashAttention that consumes (L, H, D) directly to avoid layout churn."""
+    L, H, D = q_lhd.shape
+
+    # Compute max block length once (honor caller when provided)
+    if max_seqlen is not None:
+        max_q = max_k = int(max_seqlen)
+    else:
+        max_q = _max_from_cu(cum_seq_q, L)
+        max_k = _max_from_cu(cum_seq_k, L)
+
+    # Ensure contiguity only if needed
+    if not q_lhd.is_contiguous():
+        q_lhd = q_lhd.contiguous()
+    if not k_lhd.is_contiguous():
+        k_lhd = k_lhd.contiguous()
+    if not v_lhd.is_contiguous():
+        v_lhd = v_lhd.contiguous()
+
+    out_lhd, *_ = torch.ops.aten._flash_attention_forward(
+        query=q_lhd,  # (L, H, D)
+        key=k_lhd,  # (L, H, D)
+        value=v_lhd,  # (L, H, D)
+        cum_seq_q=cum_seq_q,
+        cum_seq_k=cum_seq_k,
+        max_q=max_q,
+        max_k=max_k,
+        dropout_p=dropout,
+        is_causal=is_causal,
+        return_debug_mask=False,
+        scale=scaling,
+        window_size_left=-1,
+        window_size_right=-1,
+        alibi_slopes=None,
+    )
+    return out_lhd, None  # (L, H, D)
+
+
+def sdpa_document_mask_forward(
+    q_lhd: torch.Tensor,  # (L, H, D)
+    k_lhd: torch.Tensor,  # (L, H, D)
+    v_lhd: torch.Tensor,  # (L, H, D)
+    dropout: float,
+    scaling: float | None,
+    cu_seqlens: torch.Tensor | None,
+) -> torch.Tensor:
+    """SDPA with block-diagonal masking for variable-length sequences."""
+    L, H, D = q_lhd.shape
+
+    # Transpose to (1, H, L, D) format for SDPA
+    Q = q_lhd.permute(1, 0, 2).unsqueeze(0)
+    K = k_lhd.permute(1, 0, 2).unsqueeze(0)
+    V = v_lhd.permute(1, 0, 2).unsqueeze(0)
+
+    # Build block-diagonal mask for variable-length sequences
+    attn_mask = None
+    if cu_seqlens is not None:
+        seq_sizes = (cu_seqlens[1:] - cu_seqlens[:-1]).long()
+        seg_ids = torch.repeat_interleave(torch.arange(len(seq_sizes), device=q_lhd.device), seq_sizes)
+        block_mask = seg_ids[:, None] != seg_ids[None, :]  # Cross-document attention blocked
+        attn_mask = torch.where(block_mask, -torch.inf, 0.0).to(q_lhd.dtype).view(1, 1, L, L)
+
+    Y = F.scaled_dot_product_attention(Q, K, V, attn_mask=attn_mask, dropout_p=dropout, scale=scaling)
+    return Y.squeeze(0).permute(1, 0, 2)  # Back to (L, H, D)
 
 
 class Siglip2VariableSequenceEmbeddings(nn.Module):
@@ -172,58 +257,42 @@ class Siglip2VariableLengthAttention(nn.Module):
         self.out_proj = nn.Linear(self.embed_dim, self.embed_dim)
 
     def forward(self, hidden_states, cu_seqlens=None, max_seqlen=None):
-        batch_size, seq_len, _ = hidden_states.size()
-
-        # For variable-length attention, we need to reshape to (total_tokens, embed_dim)
+        # Expect packed sequences with batch_size == 1
+        batch_size, L, _ = hidden_states.shape
         if batch_size != 1:
-            raise ValueError("Variable-length attention expects batch_size=1 for packed sequences")
-        hidden_states = hidden_states.squeeze(0)  # Remove batch dimension: (seq_len, embed_dim)
+            raise ValueError("packed variable-length attention expects batch_size=1")
+        x = hidden_states[0]  # (L, E)
 
-        # Store original dtype
-        orig_dtype = hidden_states.dtype
+        H = self.num_heads
+        D = self.head_dim
+        p_drop = self.dropout if self.training else 0.0
 
-        # 1. Linear projections
-        Q = self.q_proj(hidden_states)  # (seq_len, embed_dim)
-        K = self.k_proj(hidden_states)  # (seq_len, embed_dim)
-        V = self.v_proj(hidden_states)  # (seq_len, embed_dim)
+        # Project and reshape to (L, H, D)
+        q = self.q_proj(x).view(L, H, D)
+        k = self.k_proj(x).view(L, H, D)
+        v = self.v_proj(x).view(L, H, D)
 
-        # 2. Reshape for multi-head attention: (seq_len, n_heads, head_dim)
-        Q = Q.view(-1, self.num_heads, self.embed_dim // self.num_heads)
-        K = K.view(-1, self.num_heads, self.embed_dim // self.num_heads)
-        V = V.view(-1, self.num_heads, self.embed_dim // self.num_heads)
+        attn_impl = getattr(self.config, "_attn_implementation", "flash_attention_3")
 
-        # 3. Apply variable-length attention using flash attention
-        attn_output, _, _, _, _ = torch.ops.aten._flash_attention_forward(
-            query=Q,
-            key=K,
-            value=V,
-            cum_seq_q=cu_seqlens,
-            cum_seq_k=cu_seqlens,
-            max_q=max_seqlen,
-            max_k=max_seqlen,
-            dropout_p=self.dropout if self.training else 0.0,
-            is_causal=False,
-            return_debug_mask=False,
-            scale=self.scale,
-            window_size_left=-1,
-            window_size_right=-1,
-            alibi_slopes=None,
-        )
+        if attn_impl in ("flash_attention_2", "flash_attention_3"):
+            y_lhd, _ = flash_attention_document_mask_forward(
+                q,
+                k,
+                v,
+                attention_mask=None,
+                dropout=p_drop,
+                scaling=self.scale,
+                cum_seq_q=cu_seqlens,
+                cum_seq_k=cu_seqlens,
+                max_seqlen=max_seqlen,
+                is_causal=False,
+            )
+        else:
+            y_lhd = sdpa_document_mask_forward(q, k, v, dropout=p_drop, scaling=self.scale, cu_seqlens=cu_seqlens)
 
-        # 4. Reshape attention output from (seq_len, n_heads, head_dim) to (seq_len, embed_dim)
-        attn_output = attn_output.reshape(seq_len, self.embed_dim)
-
-        # 5. Convert back to original dtype if needed
-        if attn_output.dtype != orig_dtype:
-            attn_output = attn_output.to(orig_dtype)
-
-        # 6. Project output
-        attn_output = self.out_proj(attn_output)  # (seq_len, embed_dim)
-
-        # 7. Add back batch dimension for compatibility
-        attn_output = attn_output.unsqueeze(0)  # (1, seq_len, embed_dim)
-
-        return attn_output, None
+        # Merge heads and project
+        y = self.out_proj(y_lhd.reshape(L, self.embed_dim))
+        return y.unsqueeze(0), None  # (1, L, E)
 
 
 class IsaacSiglip2EncoderLayer(nn.Module):
@@ -474,7 +543,7 @@ class Siglip2SequenceVisionTransformer(nn.Module):
 # Configuration
 # ============================================================================
 
-MAX_PIXELS = 60_000_000  # 60-megapixel ceiling ≈ 8200 × 7300 px
+MAX_PIXELS = 60_000_000  # 60‑megapixel ceiling ≈ 8200 × 7300 px
 
 # Vision preprocessing constants
 VISION_MEAN = (0.5, 0.5, 0.5)
@@ -491,13 +560,13 @@ def _make_writeable(arr: np.ndarray) -> np.ndarray:
     if arr.flags.writeable:
         return arr
 
-    # First, try the cheap path — in-place flag toggle (works for mmap'd arrays
+    # First, try the cheap path — in‑place flag toggle (works for mmap'd arrays
     # and some shared memory buffers):
     try:
         arr.setflags(write=True)
         return arr  # success: no data copy
     except ValueError:
-        # Buffer is inherently read-only (e.g. backed by PyAV / PIL): make copy
+        # Buffer is inherently read‑only (e.g. backed by PyAV / PIL): make copy
         return arr.copy()
 
 
@@ -805,6 +874,7 @@ class IsaacConfig(Qwen3Config):
         pixel_shuffle_scale: int = 1,
         max_sequence_length: int = 16384,
         vision_token: str = "<image>",
+        vision_attn_implementation: str | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -826,6 +896,7 @@ class IsaacConfig(Qwen3Config):
         # Processing parameters
         self.max_sequence_length = max_sequence_length
         self.vision_token = vision_token
+        self.vision_attn_implementation = vision_attn_implementation
 
 
 # ============================================================================
@@ -879,7 +950,6 @@ def create_text_event(tokenizer: AutoTokenizer, text: str, time: float = 0.0) ->
 class IsaacProcessor(ProcessorMixin):
     attributes = ["tokenizer"]
     tokenizer_class = ("Qwen2Tokenizer", "Qwen2TokenizerFast")
-
 
     def __init__(
         self,
@@ -992,8 +1062,8 @@ class IsaacProcessor(ProcessorMixin):
 
     def __call__(
         self,
-        text: Union[str, list[str]],
-        images: Union[PIL.Image.Image, list[PIL.Image.Image], None] = None,
+        text: str | list[str],
+        images: PIL.Image.Image | list[PIL.Image.Image] | None = None,
         return_tensors: str | TensorType | None = TensorType.PYTORCH,
         **kwargs,
     ) -> BatchFeature:
@@ -1135,6 +1205,12 @@ class IsaacModel(Qwen3Model):
         self.rotary_emb = IsaacRotaryEmbedding(config, device=self.device)
 
         vision_cfg = config.vision_config
+        # Use vision_attn_implementation if specified, otherwise fall back to general attn_implementation
+        vision_cfg._attn_implementation = (
+            config.vision_attn_implementation
+            if config.vision_attn_implementation is not None
+            else config._attn_implementation
+        )
         if vision_cfg is None:
             raise ValueError("IsaacConfig should always have vision_config")
 
@@ -1418,9 +1494,7 @@ class IsaacModel(Qwen3Model):
             causal_mask = attention_mask
         else:
             min_dtype = torch.finfo(dtype).min
-            causal_mask = torch.full(
-                (sequence_length, target_length), fill_value=min_dtype, dtype=dtype, device=device
-            )
+            causal_mask = torch.full((sequence_length, target_length), fill_value=min_dtype, dtype=dtype, device=device)
             diagonal_attend_mask = torch.arange(target_length, device=device) > cache_position.reshape(-1, 1)
             if config.sliding_window is not None:
                 # if we have sliding window, we should not attend to tokens beyond sliding window length, so we mask them out also
@@ -1445,7 +1519,6 @@ class IsaacModel(Qwen3Model):
                     padding_mask, min_dtype
                 )
         return causal_mask
-
 
 
 class IsaacForConditionalGeneration(Qwen3ForCausalLM, GenerationMixin):

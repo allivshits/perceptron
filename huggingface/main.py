@@ -16,7 +16,8 @@ from __future__ import annotations
 import torch
 from PIL import Image as PILImage
 from PIL import ImageDraw, ImageFont
-from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor
+import base64
+from transformers import AutoProcessor, AutoConfig, AutoModelForCausalLM
 from loguru import logger
 
 # Prefer local repo package over any site-installed "perceptron"
@@ -198,7 +199,7 @@ def main():
 
     # Load model from the HF checkpoint using AutoModelForCausalLM
     logger.info(f"Loading AutoModelForCausalLM from HF checkpoint: {hf_path}")
-    model = AutoModelForCausalLM.from_pretrained(hf_path, trust_remote_code=True)
+    model = AutoModelForCausalLM.from_pretrained(hf_path, trust_remote_code=True, vision_attn_implementation="flash_attention_2")
 
     # Move to appropriate device and dtype
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -208,7 +209,7 @@ def main():
 
     logger.info(f"Model loaded on {device} with dtype {dtype}")
 
-# Process the dummy document using chat templates
+    # Process the dummy document using chat templates
     logger.info("\nProcessing dummy document:")
     logger.info(f"Document content: {DUMMY_DOCUMENT}")
 
