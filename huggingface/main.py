@@ -16,16 +16,8 @@ from __future__ import annotations
 import torch
 from PIL import Image as PILImage
 from PIL import ImageDraw, ImageFont
-import base64
-from transformers import AutoProcessor, AutoConfig, AutoModelForCausalLM
 from loguru import logger
-
-# Prefer local repo package over any site-installed "perceptron"
-import os
-import sys
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
+from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor
 
 from perceptron.tensorstream import VisionType
 from perceptron.tensorstream.ops import tensor_stream_token_view, modality_mask
@@ -135,7 +127,7 @@ def visualize_predictions(generated_text: str, image: PILImage.Image, output_pat
     # Try to use a basic font, fall back to default if not available
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
-    except:
+    except Exception:  # pragma: no cover - font fallback
         font = ImageFont.load_default()
 
     # Define colors for different boxes

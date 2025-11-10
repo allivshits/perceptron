@@ -9,8 +9,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from .dsl.nodes import Sequence as SequenceNode, agent, image as image_node, system, text
 from .dsl.perceive import perceive
 from .errors import BadRequestError
-from .pointing.parser import parse_text
-from .annotations import serialize_annotations, annotate_image, canonicalize_text_collections
+from .annotations import serialize_annotations, canonicalize_text_collections
 from .pointing.types import bbox
 
 

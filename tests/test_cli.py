@@ -1,10 +1,16 @@
 import json
 
+import pytest
 from typer.testing import CliRunner
 
 from perceptron import PerceiveResult
 from perceptron.cli import app
 from perceptron.pointing.types import BoundingBox, SinglePoint
+
+
+@pytest.fixture(autouse=True)
+def _wide_console(monkeypatch):
+    monkeypatch.setenv("COLUMNS", "180")
 
 runner = CliRunner()
 

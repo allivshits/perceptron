@@ -17,12 +17,8 @@ import os
 from typing import Any, Dict, List, Optional
 
 import json
-import requests
 
-try:
-    import httpx
-except ImportError:  # pragma: no cover - optional dependency
-    httpx = None
+import httpx
 
 from .config import settings
 from .errors import (
@@ -116,6 +112,15 @@ _PROVIDER_CONFIG = {
         "default_model": "perceptron",
         "stream": True,
     },
+    "perceptron": {
+        "base_url": "https://api.perceptron.inc/v1",
+        "path": "/chat/completions",
+        "auth_header": "Authorization",
+        "auth_prefix": "Bearer ",
+        "env_keys": ["PERCEPTRON_API_KEY"],
+        "default_model": "isaac-0.1",
+        "stream": True,
+    },
 }
 
 
@@ -148,7 +153,7 @@ def _prepare_transport(settings_obj, provider_cfg, task, expects, *, stream=Fals
     return task, url, headers, provider_cfg
 
 
-def _map_http_error(resp: requests.Response) -> SDKError:
+def _map_http_error(resp) -> SDKError:
     try:
         data = resp.json()
     except Exception:
@@ -169,6 +174,10 @@ def _map_http_error(resp: requests.Response) -> SDKError:
     if 400 <= resp.status_code < 500:
         return BadRequestError(str(data) or resp.text)
     return ServerError(f"server error: {resp.status_code}")
+
+
+def _http_client(timeout: float):
+    return httpx.Client(timeout=timeout, http2=True)
 
 
 class Client:
@@ -216,16 +225,17 @@ class Client:
             "model": model,
             "messages": messages,
             "temperature": temperature,
-            "max_tokens": max_tokens,
+            "max_completion_tokens": max_tokens,
             "top_p": top_p,
         }
         if top_k is not None:
             body["top_k"] = top_k
         try:
-            resp = requests.post(url, headers=headers, data=json.dumps(body), timeout=s.timeout)
-        except requests.Timeout as e:
+            with _http_client(s.timeout) as session:
+                resp = session.post(url, headers=headers, json=body)
+        except httpx.TimeoutException as e:  # pragma: no cover - error path
             raise TimeoutError("request timed out") from e
-        except requests.RequestException as e:
+        except httpx.HTTPError as e:  # pragma: no cover
             raise TransportError(str(e)) from e
         if resp.status_code != 200:
             raise _map_http_error(resp)
@@ -267,7 +277,7 @@ class Client:
             "model": gen_kwargs.pop("model", provider_cfg.get("default_model", "gpt-4o")),
             "messages": messages,
             "temperature": temperature,
-            "max_tokens": max_tokens,
+            "max_completion_tokens": max_tokens,
             "top_p": top_p,
             "stream": True,
         }
@@ -280,57 +290,55 @@ class Client:
         usage_payload: dict[str, Any] | None = None
 
         try:
-            with requests.post(url, headers=headers, data=json.dumps(body), timeout=s.timeout, stream=True) as resp:
-                if resp.status_code != 200:
-                    err = _map_http_error(resp)
-                    yield {"type": "error", "message": str(err)}
-                    return
-                for raw_line in resp.iter_lines(decode_unicode=True):
-                    if not raw_line:
-                        continue
-                    if isinstance(raw_line, bytes):
-                        line = raw_line.decode("utf-8", errors="ignore")
-                    else:
-                        line = raw_line
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[len("data:") :].strip()
-                    if data == "[DONE]":
-                        break
-                    try:
-                        obj = json.loads(data)
-                    except Exception:
-                        continue
-                    if isinstance(obj, dict) and obj.get("usage") and usage_payload is None:
-                        usage_field = obj.get("usage")
-                        if isinstance(usage_field, dict):
-                            usage_payload = usage_field
-                    try:
-                        delta = obj["choices"][0]["delta"].get("content")
-                    except Exception:
-                        delta = None
-                    if delta:
-                        cumulative += delta
-                        yield {"type": "text.delta", "chunk": delta, "total_chars": len(cumulative)}
-                        # Check buffer size
-                        if parsing_enabled and s.max_buffer_bytes is not None:
-                            if len(cumulative.encode("utf-8")) > s.max_buffer_bytes:
-                                parsing_enabled = False
-                                # We stop emitting points thereafter; final will include an issue
-                        # Incremental points
-                        if parse_points and parsing_enabled and expects in {"point", "box", "polygon"}:
-                            # parse segments and emit newly completed tags
-                            for seg in parse_text(cumulative):
-                                if seg["kind"] in {"point", "box", "polygon"}:
-                                    span = (seg["span"]["start"], seg["span"]["end"])
-                                    if span not in emitted_spans and seg["kind"] == expects:
-                                        emitted_spans.add(span)
-                                        yield {"type": "points.delta", "points": [seg["value"]], "span": seg["span"]}
-                    # else: ignore other delta types
-        except requests.Timeout:
+            with _http_client(s.timeout) as session:
+                with session.stream("POST", url, headers=headers, json=body) as resp:
+                    if resp.status_code != 200:
+                        err = _map_http_error(resp)
+                        yield {"type": "error", "message": str(err)}
+                        return
+                    for raw_line in resp.iter_lines():
+                        if not raw_line:
+                            continue
+                        line = raw_line.decode("utf-8", errors="ignore") if isinstance(raw_line, bytes) else raw_line
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[len("data:") :].strip()
+                        if data == "[DONE]":
+                            break
+                        try:
+                            obj = json.loads(data)
+                        except Exception:
+                            continue
+                        if isinstance(obj, dict) and obj.get("usage") and usage_payload is None:
+                            usage_field = obj.get("usage")
+                            if isinstance(usage_field, dict):
+                                usage_payload = usage_field
+                        try:
+                            delta = obj["choices"][0]["delta"].get("content")
+                        except Exception:
+                            delta = None
+                        if delta:
+                            cumulative += delta
+                            yield {"type": "text.delta", "chunk": delta, "total_chars": len(cumulative)}
+                            # Check buffer size
+                            if parsing_enabled and s.max_buffer_bytes is not None:
+                                if len(cumulative.encode("utf-8")) > s.max_buffer_bytes:
+                                    parsing_enabled = False
+                                    # We stop emitting points thereafter; final will include an issue
+                            # Incremental points
+                            if parse_points and parsing_enabled and expects in {"point", "box", "polygon"}:
+                                # parse segments and emit newly completed tags
+                                for seg in parse_text(cumulative):
+                                    if seg["kind"] in {"point", "box", "polygon"}:
+                                        span = (seg["span"]["start"], seg["span"]["end"])
+                                        if span not in emitted_spans and seg["kind"] == expects:
+                                            emitted_spans.add(span)
+                                            yield {"type": "points.delta", "points": [seg["value"]], "span": seg["span"]}
+                        # else: ignore other delta types
+        except httpx.TimeoutException:
             yield {"type": "error", "message": "timeout"}
             return
-        except requests.RequestException as e:
+        except httpx.HTTPError as e:
             yield {"type": "error", "message": str(e)}
             return
         # final
@@ -364,12 +372,8 @@ class AsyncClient(Client):
 
     def __init__(self, **overrides: Any) -> None:
         super().__init__(**overrides)
-        if httpx is None:  # pragma: no cover - guarded during tests
-            raise ImportError("Install the 'httpx' package to enable AsyncClient support.")
 
     async def generate(self, task: dict, *, expects: Optional[str] = None, **gen_kwargs: Any) -> dict:
-        if httpx is None:  # pragma: no cover
-            raise ImportError("httpx is required for AsyncClient.generate")
         s = self._settings
         provider_cfg = _resolve_provider(gen_kwargs.pop("provider", None) or s.provider)
 
@@ -386,7 +390,7 @@ class AsyncClient(Client):
             "model": model,
             "messages": messages,
             "temperature": temperature,
-            "max_tokens": max_tokens,
+            "max_completion_tokens": max_tokens,
             "top_p": top_p,
         }
         if top_k is not None:
@@ -414,8 +418,6 @@ class AsyncClient(Client):
         return result
 
     def stream(self, task: dict, *, expects: Optional[str] = None, parse_points: bool = False, **gen_kwargs: Any):
-        if httpx is None:  # pragma: no cover
-            raise ImportError("httpx is required for AsyncClient.stream")
         s = self._settings
         provider_cfg = _resolve_provider(gen_kwargs.pop("provider", None) or s.provider)
         temperature = gen_kwargs.pop("temperature", s.temperature)
@@ -439,7 +441,7 @@ class AsyncClient(Client):
                 "model": gen_kwargs.pop("model", resolved_cfg.get("default_model", "gpt-4o")),
                 "messages": messages,
                 "temperature": temperature,
-                "max_tokens": max_tokens,
+                "max_completion_tokens": max_tokens,
                 "top_p": top_p,
                 "stream": True,
             }

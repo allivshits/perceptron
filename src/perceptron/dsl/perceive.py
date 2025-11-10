@@ -33,8 +33,6 @@ try:
 except Exception:  # pragma: no cover
     np = None  # type: ignore
 
-import requests
-
 from ..config import settings
 from ..client import Client, AsyncClient
 from ..errors import ExpectationError, AnchorError

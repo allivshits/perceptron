@@ -37,20 +37,31 @@ def test_stream_text_and_points(monkeypatch):
     def fn(img):
         return image(img) + text("Find point")
 
-    # Mock requests.post to stream SSE lines
+    # Mock HTTP transport to stream SSE lines
     from perceptron import client as client_mod
 
-    def _mock_post(url, headers=None, data=None, timeout=None, stream=False):
-        # two chunks: greeting and a completed point tag
-        chunks = [
-            _sse({"choices": [{"delta": {"content": "Hello "}}]}),
-            _sse({"choices": [{"delta": {"content": "<point> (1,2) </point>!"}}]}),
-            _sse({"usage": {"prompt_tokens": 12, "completion_tokens": 3}}),
-            "data: [DONE]",
-        ]
-        return _MockResp(chunks, status=200)
+    chunks = [
+        _sse({"choices": [{"delta": {"content": "Hello "}}]}),
+        _sse({"choices": [{"delta": {"content": "<point> (1,2) </point>!"}}]}),
+        _sse({"usage": {"prompt_tokens": 12, "completion_tokens": 3}}),
+        "data: [DONE]",
+    ]
 
-    monkeypatch.setattr(client_mod.requests, "post", _mock_post)
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):  # pragma: no cover - ensure generate path unused
+            raise AssertionError("post should not be called in streaming test")
+
+        def stream(self, method, url, headers=None, json=None):
+            assert method == "POST"
+            return _MockResp(chunks, status=200)
+
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
 
     # Provide an 8x8 image via PIL if available; else bytes
     try:
@@ -78,10 +89,20 @@ def test_stream_http_error(monkeypatch):
 
     from perceptron import client as client_mod
 
-    def _mock_post(url, headers=None, data=None, timeout=None, stream=False):
-        return _MockResp(["data: [DONE]"], status=500)
+    class _Client:
+        def __enter__(self):
+            return self
 
-    monkeypatch.setattr(client_mod.requests, "post", _mock_post)
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError
+
+        def stream(self, method, url, headers=None, json=None):
+            return _MockResp(["data: [DONE]"], status=500)
+
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
 
     events = list(fn(b"\x89PNG\r\n\x1a\nxxxxxxxxxx"))
     assert events and events[0]["type"] == "error"
