@@ -31,7 +31,7 @@ from .errors import (
     TimeoutError,
     TransportError,
 )
-from .highlevel import caption, detect, detect_from_coco, ocr, question
+from .highlevel import caption, detect, detect_from_coco, ocr, ocr_html, ocr_markdown, question
 from .pointing.parser import (
     PointParser,
     ReasoningExtraction,
@@ -102,6 +102,8 @@ __all__ = [
     "image",
     "inspect_task",
     "ocr",
+    "ocr_html",
+    "ocr_markdown",
     "parse_text",
     "perceive",
     "point",

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .annotations import canonicalize_text_collections, serialize_annotations
+from .client import _PROVIDER_CONFIG, _select_model
+from .config import settings
 from .dsl.nodes import (
     Sequence as SequenceNode,
 )
@@ -22,6 +24,14 @@ from .dsl.nodes import (
 from .dsl.perceive import perceive
 from .errors import BadRequestError
 from .pointing.types import bbox
+from .prompting import (
+    CaptionPromptTemplate,
+    DetectPromptTemplate,
+    HighLevelPromptProfile,
+    OcrPromptTemplate,
+    QuestionPromptTemplate,
+    resolve_prompt_profile,
+)
 
 COCO_BBOX_MIN_VALUES = 4
 
@@ -38,6 +48,22 @@ class CocoDetectResult:
     image_path: Path
     coco_image: dict[str, Any]
     result: Any
+
+
+def _prompt_profile_from_kwargs(gen_kwargs: Mapping[str, Any]) -> tuple[HighLevelPromptProfile, str | None]:
+    """Resolve the active prompt profile (and model) for a high-level helper call."""
+
+    env = settings()
+    provider_override = gen_kwargs.get("provider")
+    provider_name = provider_override or env.provider or "fal"
+    provider_key = provider_name.lower() if isinstance(provider_name, str) else provider_name
+    provider_cfg = _PROVIDER_CONFIG.get(provider_key or "") or {}
+    requested_model = gen_kwargs.get("model")
+    resolved_model = _select_model(provider_cfg, requested_model, provider_name=provider_key or "fal")
+    if resolved_model is None:
+        resolved_model = provider_cfg.get("default_model")
+    profile = resolve_prompt_profile(resolved_model)
+    return profile, resolved_model
 
 
 def _normalize_examples(examples: Sequence[Any], class_order: Sequence[str] | None) -> list[_NormalizedExample]:
@@ -75,15 +101,19 @@ def _expectation_hint_text(expects: str | None) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def _caption_sequence(image_obj: Any, style: str, expects: str | None) -> SequenceNode:
-    style_map = {
-        "concise": "Provide a concise, human-friendly caption for the upcoming image.",
-        "detailed": "Provide a detailed caption describing key objects, relationships, and context in the upcoming image.",
-    }
+def _caption_sequence(
+    image_obj: Any,
+    style: str,
+    expects: str | None,
+    template: CaptionPromptTemplate,
+) -> SequenceNode:
+    style_map = template.style_prompts
     if style not in style_map:
         raise BadRequestError(f"Unsupported caption style: {style}")
     hint = _expectation_hint_text(expects)
     nodes = []
+    if template.system_instruction:
+        nodes.append(system(template.system_instruction))
     if hint:
         nodes.append(text(hint))
     nodes.append(image_node(image_obj))
@@ -101,6 +131,8 @@ def caption(
 ):
     """Generate a caption for an image using predefined best-practice prompts."""
 
+    profile, _ = _prompt_profile_from_kwargs(gen_kwargs)
+    caption_template = profile.caption
     normalized = expects.lower() if isinstance(expects, str) else expects
     valid = {"text", "point", "box", "polygon"}
     if normalized not in valid:
@@ -119,7 +151,7 @@ def caption(
 
     @captioner
     def _run():
-        return _caption_sequence(image_obj, style, structured_expectation)
+        return _caption_sequence(image_obj, style, structured_expectation, caption_template)
 
     return _run()
 
@@ -133,16 +165,16 @@ def _question_sequence(
     image_obj: Any,
     question_text: str,
     expects: str | None,
+    template: QuestionPromptTemplate,
 ) -> SequenceNode:
     if expects in {"point", "box", "polygon"}:
-        system_instruction = (
-            "You are a grounded vision assistant. Answer the user's question and cite the relevant "
-            "regions using structured tags."
-        )
+        system_instruction = template.grounded_instruction
     else:
-        system_instruction = "You are a visual question answering assistant. Provide a direct, concise answer."
+        system_instruction = template.open_instruction
 
-    nodes = [system(system_instruction)]
+    nodes: list = []
+    if system_instruction:
+        nodes.append(system(system_instruction))
     hint = _expectation_hint_text(expects)
     if hint:
         nodes.append(text(hint))
@@ -161,6 +193,8 @@ def question(
 ):
     """Answer a question about an image, optionally requesting structured outputs."""
 
+    profile, _ = _prompt_profile_from_kwargs(gen_kwargs)
+    question_template = profile.question
     normalized = expects.lower()
     valid = {"text", "point", "box", "polygon"}
     if normalized not in valid:
@@ -179,7 +213,7 @@ def question(
 
     @qa_runner
     def _run():
-        return _question_sequence(image_obj, question_text, structured_expectation)
+        return _question_sequence(image_obj, question_text, structured_expectation, question_template)
 
     return _run()
 
@@ -192,24 +226,37 @@ def question(
 def _ocr_sequence(
     image_obj: Any,
     prompt: str | None,
+    template: OcrPromptTemplate,
 ) -> SequenceNode:
-    base_instruction = prompt or "Transcribe every readable word in the image."
-    system_instruction = "You are an OCR (Optical Character Recognition) system. Accurately detect, extract, and transcribe all readable text from the image."
-    nodes = [system(system_instruction)]
-    im = image_node(image_obj)
-    nodes.extend([im, text(base_instruction)])
+    nodes = []
+    if template.system_instruction:
+        nodes.append(system(template.system_instruction))
+    nodes.append(image_node(image_obj))
+    if prompt:
+        nodes.append(text(prompt))
     return SequenceNode(nodes)
 
 
-def ocr(
+def _run_ocr(
     image_obj: Any,
     *,
-    prompt: str | None = None,
-    stream: bool = False,
-    **gen_kwargs: Any,
+    prompt: str | None,
+    stream: bool,
+    mode: str,
+    gen_kwargs: dict[str, Any],
 ):
-    """Perform OCR on an image."""
-
+    profile, resolved_model = _prompt_profile_from_kwargs(gen_kwargs)
+    ocr_template = profile.ocr
+    effective_prompt = prompt
+    if effective_prompt is None:
+        available_modes = set(ocr_template.prompts.keys())
+        if mode not in ocr_template.prompts:
+            model_label = resolved_model or profile.key
+            available_display = ", ".join(sorted(available_modes)) or "none"
+            raise BadRequestError(
+                f"OCR mode '{mode}' is not configured for model '{model_label}'. Available modes: {available_display}."
+            )
+        effective_prompt = ocr_template.prompts.get(mode)
     perceive_kwargs: dict[str, Any] = {
         "stream": stream,
         "expects": None,
@@ -220,9 +267,45 @@ def ocr(
 
     @reader
     def _run():
-        return _ocr_sequence(image_obj, prompt)
+        return _ocr_sequence(image_obj, effective_prompt, ocr_template)
 
     return _run()
+
+
+def ocr(
+    image_obj: Any,
+    *,
+    prompt: str | None = None,
+    stream: bool = False,
+    **gen_kwargs: Any,
+):
+    """Perform OCR on an image (plain text)."""
+
+    return _run_ocr(image_obj, prompt=prompt, stream=stream, mode="plain", gen_kwargs=gen_kwargs)
+
+
+def ocr_markdown(
+    image_obj: Any,
+    *,
+    prompt: str | None = None,
+    stream: bool = False,
+    **gen_kwargs: Any,
+):
+    """Perform OCR and request Markdown output when supported by the provider."""
+
+    return _run_ocr(image_obj, prompt=prompt, stream=stream, mode="markdown", gen_kwargs=gen_kwargs)
+
+
+def ocr_html(
+    image_obj: Any,
+    *,
+    prompt: str | None = None,
+    stream: bool = False,
+    **gen_kwargs: Any,
+):
+    """Perform OCR and request HTML output when supported by the provider."""
+
+    return _run_ocr(image_obj, prompt=prompt, stream=stream, mode="html", gen_kwargs=gen_kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -230,12 +313,15 @@ def ocr(
 # ---------------------------------------------------------------------------
 
 
-def _detect_system_message(classes: Sequence[str] | None) -> SequenceNode:
+def _detect_system_message(
+    classes: Sequence[str] | None,
+    template: DetectPromptTemplate,
+) -> SequenceNode:
     if classes:
         categories = ", ".join(str(c) for c in classes)
-        message = f"Your goal is to segment out the following categories: {categories}"
+        message = template.category_instruction_template.format(categories=categories)
     else:
-        message = "Your goal is to segment out the objects in the scene"
+        message = template.general_instruction
     return SequenceNode([system(message)])
 
 
@@ -244,8 +330,9 @@ def _detect_sequence(
     *,
     classes: Sequence[str] | None,
     examples: Sequence[Any] | None,
+    template: DetectPromptTemplate,
 ) -> SequenceNode:
-    sequence = _detect_system_message(classes)
+    sequence = _detect_system_message(classes, template)
     normalized_examples = _normalize_examples(examples, classes) if examples else []
     for ex in normalized_examples:
         sequence = sequence + image_node(ex.image)
@@ -269,6 +356,8 @@ def detect(  # noqa: PLR0913
 ):
     """High-level object detection helper."""
 
+    profile, _ = _prompt_profile_from_kwargs(gen_kwargs)
+    detect_template = profile.detect
     perceive_kwargs: dict[str, Any] = {
         "expects": "box",
         "stream": stream,
@@ -283,7 +372,7 @@ def detect(  # noqa: PLR0913
 
     @detector
     def _run():
-        return _detect_sequence(image_obj, classes=classes, examples=examples)
+        return _detect_sequence(image_obj, classes=classes, examples=examples, template=detect_template)
 
     return _run()
 

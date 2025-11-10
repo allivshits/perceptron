@@ -111,7 +111,8 @@ _PROVIDER_CONFIG = {
         "auth_header": "Authorization",
         "auth_prefix": "Key ",
         "env_keys": ["FAL_KEY", "PERCEPTRON_API_KEY"],
-        "default_model": "perceptron",
+        "default_model": "isaac-0.1",
+        "supported_models": ["isaac-0.1"],
         "stream": True,
     },
     "perceptron": {
@@ -121,9 +122,39 @@ _PROVIDER_CONFIG = {
         "auth_prefix": "Bearer ",
         "env_keys": ["PERCEPTRON_API_KEY"],
         "default_model": "isaac-0.1",
+        "supported_models": ["isaac-0.1", "qwen3-vl-235b-a22b-thinking"],
         "stream": True,
     },
 }
+
+
+def _select_model(
+    provider_cfg: dict[str, Any],
+    requested_model: str | None,
+    *,
+    provider_name: str | None = None,
+) -> str | None:
+    model = requested_model or provider_cfg.get("default_model")
+    supported = provider_cfg.get("supported_models")
+    provider_label = provider_name or provider_cfg.get("name") or "unknown"
+    if supported and model and model not in supported:
+        allowed = ", ".join(supported)
+        raise BadRequestError(f"Model '{model}' is not supported for provider='{provider_label}'. Allowed: {allowed}")
+    return model
+
+
+def _pop_and_resolve_model(provider_cfg: dict[str, Any], gen_kwargs: dict[str, Any]) -> str:
+    requested_model = gen_kwargs.pop("model", None)
+    resolved = _select_model(provider_cfg, requested_model)
+    if resolved:
+        return resolved
+    default_model = provider_cfg.get("default_model")
+    if default_model:
+        return default_model
+    provider_label = provider_cfg.get("name") or "unknown"
+    raise BadRequestError(
+        f"No model configured for provider '{provider_label}'. Specify a model explicitly or configure a default."
+    )
 
 
 def _resolve_provider(provider: str | None) -> dict:
@@ -297,9 +328,8 @@ class Client:
         top_k = gen_kwargs.pop("top_k", s.top_k)
 
         task, url, headers, provider_cfg = _prepare_transport(s, provider_cfg, task, expects)
-
         messages = _task_to_openai_messages(task)
-        model = gen_kwargs.pop("model", provider_cfg.get("default_model", "gpt-4o"))
+        model = _pop_and_resolve_model(provider_cfg, gen_kwargs)
         body = {
             "model": model,
             "messages": messages,
@@ -359,8 +389,9 @@ class Client:
             yield {"type": "error", "message": str(exc)}
             return
         messages = _task_to_openai_messages(task)
+        model = _pop_and_resolve_model(provider_cfg, gen_kwargs)
         body = {
-            "model": gen_kwargs.pop("model", provider_cfg.get("default_model", "gpt-4o")),
+            "model": model,
             "messages": messages,
             "temperature": temperature,
             "max_completion_tokens": max_tokens,
@@ -487,7 +518,7 @@ class AsyncClient(Client):
         prepared_task, url, headers, provider_cfg = _prepare_transport(s, provider_cfg, task, expects)
 
         messages = _task_to_openai_messages(prepared_task)
-        model = gen_kwargs.pop("model", provider_cfg.get("default_model", "gpt-4o"))
+        model = _pop_and_resolve_model(provider_cfg, gen_kwargs)
         body = {
             "model": model,
             "messages": messages,
@@ -546,8 +577,9 @@ class AsyncClient(Client):
                 return
 
             messages = _task_to_openai_messages(prepared_task)
+            model = _pop_and_resolve_model(resolved_cfg, gen_kwargs)
             body = {
-                "model": gen_kwargs.pop("model", resolved_cfg.get("default_model", "gpt-4o")),
+                "model": model,
                 "messages": messages,
                 "temperature": temperature,
                 "max_completion_tokens": max_tokens,
