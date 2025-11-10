@@ -46,10 +46,20 @@ def test_stream_parsing_buffer_overflow(monkeypatch):
     chunks.append(_sse({"choices": [{"delta": {"content": "<point> (1,2) </point>"}}]}))
     chunks.append("data: [DONE]")
 
-    def _mock_post(url, headers=None, data=None, timeout=None, stream=False):
-        return _MockResp(chunks, status=200)
+    class _Client:
+        def __enter__(self):
+            return self
 
-    monkeypatch.setattr(client_mod.requests, "post", _mock_post)
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *_, **__):  # pragma: no cover
+            raise AssertionError
+
+        def stream(self, method, url, headers=None, json=None):
+            return _MockResp(chunks, status=200)
+
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
 
     with cfg(max_buffer_bytes=40):
         events = list(fn(b"\x89PNG\r\n\x1a\nHEADERONLY"))

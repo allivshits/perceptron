@@ -2,8 +2,6 @@ import asyncio
 import json
 from types import SimpleNamespace
 
-import pytest
-
 from perceptron import AsyncClient
 from perceptron import client as client_mod
 

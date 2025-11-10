@@ -1,7 +1,3 @@
-import json
-
-import pytest
-
 from perceptron import perceive, image, text, box, agent
 from perceptron import config as cfg
 from perceptron.pointing.parser import PointParser
@@ -71,13 +67,23 @@ def test_fal_payload_structure(monkeypatch):
                 ]
             }
 
-    def _mock_post(url, headers=None, data=None, timeout=None):
-        captured["url"] = url
-        captured["headers"] = headers
-        captured["payload"] = json.loads(data)
-        return _Resp()
+    class _Client:
+        def __enter__(self):
+            return self
 
-    monkeypatch.setattr(client_mod.requests, "post", _mock_post)
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["payload"] = json
+            return _Resp()
+
+        def stream(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError
+
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
     monkeypatch.setenv("FAL_KEY", "test-key")
 
     @perceive(expects="box")

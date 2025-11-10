@@ -158,8 +158,9 @@ def test_prompt_collection_canonicalization():
     with cfg(provider=None):
         res = detect(b"target", classes=["group"], examples=[example])
 
-    assistant = next(item for item in res.raw["content"] if item.get("role") == "assistant")
-    prompt_text = next(item for item in res.raw["content"] if item.get("role") == "user" and "context" in item.get("content", ""))["content"]
+    prompt_text = next(
+        item for item in res.raw["content"] if item.get("role") == "user" and "context" in item.get("content", "")
+    )["content"]
     assert prompt_text.index('(10,10) (15,15)') < prompt_text.index('(20,20) (30,30)')
 
 
@@ -191,11 +192,21 @@ def test_detect_flattens_collection_response(monkeypatch):
         ]
     }
 
-    def _mock_post(url, headers=None, data=None, timeout=None):
-        return _FakeResponse(payload)
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            return _FakeResponse(payload)
+
+        def stream(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError
 
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
-    monkeypatch.setattr(client_mod.requests, "post", _mock_post)
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
 
     with cfg(provider="fal", base_url="https://unit.test", api_key="test-key"):
         res = detect(b"\x89PNG\r\n\x1a\n" + b"3" * 12, classes=["dog"])
@@ -297,3 +308,44 @@ def test_detect_from_coco_shots(monkeypatch, tmp_path):
     assert len(sample) == 2
     mentions = {box.mention for example in sample for box in example.get("boxes", []) if getattr(box, "mention", None)}
     assert mentions == {"cell", "artifact"}
+
+
+def test_examples_icl_detection_sequence(monkeypatch):
+    from perceptron import client as client_mod
+
+    captured: dict[str, dict] = {}
+
+    def _mock_generate(self, task, **kwargs):
+        captured["task"] = task
+        return {"text": "ok", "points": [], "parsed": None, "raw": {"choices": []}}
+
+    monkeypatch.setattr(client_mod.Client, "generate", _mock_generate)
+
+    cat_example = annotate_image(
+        "examples/icl_detection/classA.jpg",
+        {"classA": [bbox(316, 136, 703, 906, mention="classA")]},
+    )
+
+    dog_example = annotate_image(
+        "examples/icl_detection/classB.webp",
+        {"classB": [bbox(161, 48, 666, 980, mention="classB")]},
+    )
+
+    with cfg(provider="perceptron", api_key="test-key"):
+        res = detect(
+            "examples/icl_detection/input.png",
+            classes=["classA", "classB"],
+            examples=[cat_example, dog_example],
+        )
+
+    assert res.text == "ok"
+    assert "task" in captured
+    task = captured["task"]
+    content = task.get("content", [])
+    assistant_messages = [item.get("content", "") for item in content if item.get("role") == "assistant"]
+    assert any("classA" in msg and "(316,136) (703,906)" in msg for msg in assistant_messages)
+    assert any("classB" in msg and "(161,48) (666,980)" in msg for msg in assistant_messages)
+    system_msgs = [item.get("content", "") for item in content if item.get("role") == "system"]
+    assert system_msgs and "classA" in system_msgs[0] and "classB" in system_msgs[0]
+    image_nodes = [item for item in content if item.get("type") == "image"]
+    assert len(image_nodes) == 3
