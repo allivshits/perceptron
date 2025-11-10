@@ -1,5 +1,5 @@
 """
-perceptron – Python SDK (v0.1 scaffolding)
+perceptron - Python SDK (v0.1 scaffolding)
 
 Public surface (subject to refinement):
 - DSL: perceive (decorator), text, system, agent, image, point, box, polygon, block
@@ -11,31 +11,27 @@ This initial scaffold focuses on the compile/runtime pieces that do not require
 network access. Transport and streaming are added in later phases.
 """
 
+import importlib
+
 __version__ = "0.1.2"
 
-from .config import configure, config, settings
-from .client import Client, AsyncClient
+from .annotations import annotate_image
+from .client import AsyncClient, Client
+from .config import config, configure, settings
+from .dsl.nodes import agent, block, box, image, point, polygon, system, text
+from .dsl.perceive import PerceiveResult, async_perceive, inspect_task, perceive
 from .errors import (
-    SDKError,
-    TransportError,
-    TimeoutError,
+    AnchorError,
     AuthError,
-    RateLimitError,
-    ServerError,
     BadRequestError,
     ExpectationError,
-    AnchorError,
+    RateLimitError,
+    SDKError,
+    ServerError,
+    TimeoutError,
+    TransportError,
 )
-from .pointing.types import (
-    SinglePoint,
-    BoundingBox,
-    Polygon,
-    Collection,
-    pt,
-    bbox,
-    poly,
-    collection,
-)
+from .highlevel import caption, detect, detect_from_coco, ocr, question
 from .pointing.parser import (
     PointParser,
     ReasoningExtraction,
@@ -45,78 +41,77 @@ from .pointing.parser import (
     parse_text,
     strip_tags,
 )
-from .dsl.nodes import text, system, agent, image, point, box, polygon, block
-from .dsl.perceive import perceive, async_perceive, inspect_task, PerceiveResult
-from .annotations import annotate_image
-from .highlevel import caption, ocr, detect, detect_from_coco, question
+from .pointing.types import (
+    BoundingBox,
+    Collection,
+    Polygon,
+    SinglePoint,
+    bbox,
+    collection,
+    poly,
+    pt,
+)
+
 
 # Lazy-load selected subpackages to allow attribute-style access like
 # `perceptron.tensorstream` without importing it eagerly (and without forcing
 # optional dependencies like torch unless used).
 def __getattr__(name):
     if name == "tensorstream":
-        import importlib
-
         module = importlib.import_module(f"{__name__}.tensorstream")
         globals()[name] = module
         return module
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
+
 __all__ = [
-    # Config
-    "configure",
-    "config",
-    "settings",
-    "Client",
-    "AsyncClient",
-    # Errors
-    "SDKError",
-    "TransportError",
-    "TimeoutError",
-    "AuthError",
-    "RateLimitError",
-    "ServerError",
-    "BadRequestError",
-    "ExpectationError",
     "AnchorError",
-    # Pointing types & constructors
-    "SinglePoint",
+    "AsyncClient",
+    "AuthError",
+    "BadRequestError",
     "BoundingBox",
-    "Polygon",
+    "Client",
     "Collection",
-    "pt",
-    "bbox",
-    "poly",
-    "collection",
-    # Parser & helpers
+    "ExpectationError",
+    "PerceiveResult",
     "PointParser",
+    "Polygon",
+    "RateLimitError",
     "ReasoningExtraction",
     "ReasoningStreamCleaner",
-    "parse_text",
+    "SDKError",
+    "ServerError",
+    "SinglePoint",
+    "TimeoutError",
+    "TransportError",
+    "__version__",
+    "agent",
+    "annotate_image",
+    "async_perceive",
+    "bbox",
+    "block",
+    "box",
+    "caption",
+    "collection",
+    "config",
+    "configure",
+    "detect",
+    "detect_from_coco",
     "extract_points",
     "extract_reasoning",
-    "strip_tags",
-    # DSL nodes & decorator
-    "text",
-    "system",
-    "agent",
     "image",
-    "point",
-    "box",
-    "polygon",
-    "block",
-    "perceive",
-    "async_perceive",
     "inspect_task",
-    "PerceiveResult",
-    # High-level helpers
-    "annotate_image",
-    "caption",
     "ocr",
-    "detect",
+    "parse_text",
+    "perceive",
+    "point",
+    "poly",
+    "polygon",
+    "pt",
     "question",
-    "detect_from_coco",
-    "__version__",
-    # Lazily exposed subpackages
+    "settings",
+    "strip_tags",
+    "system",
     "tensorstream",
+    "text",
 ]

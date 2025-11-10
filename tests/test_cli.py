@@ -12,12 +12,20 @@ from perceptron.pointing.types import BoundingBox, SinglePoint
 def _wide_console(monkeypatch):
     monkeypatch.setenv("COLUMNS", "180")
 
+
 runner = CliRunner()
 
 
 class _StubResult(PerceiveResult):
     def __init__(self, text: str):
-        super().__init__(text=text, points=None, parsed=None, usage=None, errors=[], raw={"text": text})
+        super().__init__(
+            text=text,
+            points=None,
+            parsed=None,
+            usage=None,
+            errors=[],
+            raw={"text": text},
+        )
 
 
 def test_caption_command(monkeypatch, tmp_path):

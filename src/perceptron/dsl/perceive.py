@@ -15,12 +15,13 @@ PerceiveResult
 from __future__ import annotations
 
 import base64
+import inspect
+import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-import inspect
-from typing import Any, Callable
-import os
+from typing import Any
 from urllib.parse import urlparse
 
 try:
@@ -33,22 +34,30 @@ try:
 except Exception:  # pragma: no cover
     np = None  # type: ignore
 
+from ..client import _PROVIDER_CONFIG, AsyncClient, Client
 from ..config import settings
-from ..client import Client, AsyncClient
-from ..errors import ExpectationError, AnchorError
+from ..errors import AnchorError, ExpectationError
+from ..pointing.parser import PointParser_serialize
+from ..pointing.types import BoundingBox, Polygon, SinglePoint
 from .nodes import (
+    Agent,
     DSLNode,
     Sequence,
-    Text,
     System,
-    Agent,
-    Image as ImageNode,
-    PointTag as PointTagNode,
+    Text,
+)
+from .nodes import (
     BoxTag as BoxTagNode,
+)
+from .nodes import (
+    Image as ImageNode,
+)
+from .nodes import (
+    PointTag as PointTagNode,
+)
+from .nodes import (
     PolygonTag as PolygonTagNode,
 )
-from ..pointing.types import SinglePoint, BoundingBox, Polygon
-from ..pointing.parser import PointParser_serialize
 
 
 def _encode_bytes(data: bytes) -> tuple[str, dict[str, Any]]:
@@ -66,7 +75,7 @@ def _encode_bytes(data: bytes) -> tuple[str, dict[str, Any]]:
 def _to_b64_image(obj: Any) -> tuple[str, dict]:
     """Return base64 string and metadata with width/height.
 
-    Accepts: Path/str (path or http/https URL), bytes, file-like, PIL.Image.Image, numpy.ndarray (H×W×C, uint8)
+    Accepts: Path/str (path or http/https URL), bytes, file-like, PIL.Image.Image, numpy.ndarray (HxWxC, uint8)
     """
     meta: dict[str, Any] = {}
     if isinstance(obj, (str, Path)):
@@ -117,7 +126,9 @@ def _compile(nodes: DSLNode | Sequence, *, expects: str | None, strict: bool) ->
     last_image_seen: ImageNode | None = None
     issues: list[dict] = []
 
-    def resolve_dims(img_node: ImageNode | None) -> tuple[int | None, int | None] | None:
+    def resolve_dims(
+        img_node: ImageNode | None,
+    ) -> tuple[int | None, int | None] | None:
         if img_node is None:
             return None
         dims = image_dims.get(id(img_node))
@@ -147,7 +158,10 @@ def _compile(nodes: DSLNode | Sequence, *, expects: str | None, strict: bool) ->
                     "type": "image",
                     "role": "user",
                     "content": b64,
-                    "metadata": {"width": meta.get("width"), "height": meta.get("height")},
+                    "metadata": {
+                        "width": meta.get("width"),
+                        "height": meta.get("height"),
+                    },
                 }
             )
         elif isinstance(node, (PointTagNode, BoxTagNode, PolygonTagNode)):
@@ -158,18 +172,23 @@ def _compile(nodes: DSLNode | Sequence, *, expects: str | None, strict: bool) ->
                     ref = last_image_seen
                     dims = resolve_dims(ref)
                 else:
-                    issue = {"code": "anchor_missing", "message": "Tag missing image= in multi-image context"}
+                    issue = {
+                        "code": "anchor_missing",
+                        "message": "Tag missing image= in multi-image context",
+                    }
                     if strict:
                         raise AnchorError(issue["message"])
                     issues.append(issue)
+            elif isinstance(ref, ImageNode):
+                dims = resolve_dims(ref)
             else:
-                if isinstance(ref, ImageNode):
-                    dims = resolve_dims(ref)
-                else:
-                    issue = {"code": "anchor_missing", "message": "image= must reference an image(...) node"}
-                    if strict:
-                        raise AnchorError(issue["message"])
-                    issues.append(issue)
+                issue = {
+                    "code": "anchor_missing",
+                    "message": "image= must reference an image(...) node",
+                }
+                if strict:
+                    raise AnchorError(issue["message"])
+                issues.append(issue)
 
             if isinstance(node, PointTagNode):
                 obj = SinglePoint(node.x, node.y, mention=node.mention, t=node.t)
@@ -186,7 +205,10 @@ def _compile(nodes: DSLNode | Sequence, *, expects: str | None, strict: bool) ->
                 tag = PointParser_serialize(obj)
             elif isinstance(node, BoxTagNode):
                 obj = BoundingBox(
-                    SinglePoint(node.x1, node.y1), SinglePoint(node.x2, node.y2), mention=node.mention, t=node.t
+                    SinglePoint(node.x1, node.y1),
+                    SinglePoint(node.x2, node.y2),
+                    mention=node.mention,
+                    t=node.t,
                 )
                 if dims and all(d is not None for d in dims):
                     w, h = dims
@@ -203,7 +225,11 @@ def _compile(nodes: DSLNode | Sequence, *, expects: str | None, strict: bool) ->
                         issues.append(issue)
                 tag = PointParser_serialize(obj)
             else:
-                obj = Polygon([SinglePoint(x, y) for (x, y) in node.coords], mention=node.mention, t=node.t)
+                obj = Polygon(
+                    [SinglePoint(x, y) for (x, y) in node.coords],
+                    mention=node.mention,
+                    t=node.t,
+                )
                 if dims and all(d is not None for d in dims):
                     w, h = dims
                     for p in obj.hull:
@@ -338,7 +364,12 @@ def perceive(
                 points = resp.get("points")
                 parsed = resp.get("parsed")
                 return PerceiveResult(
-                    text=text, points=points, parsed=parsed, usage=None, errors=issues, raw=resp.get("raw")
+                    text=text,
+                    points=points,
+                    parsed=parsed,
+                    usage=None,
+                    errors=issues,
+                    raw=resp.get("raw"),
                 )
 
         def _inspect(*args: Any, **kwargs: Any):
@@ -418,10 +449,24 @@ def async_perceive(
 
             if resolved_provider is None:
                 errors_with_hint = [*issues, _credentials_issue(provider_name)]
-                return PerceiveResult(text=None, points=None, parsed=None, usage=None, errors=errors_with_hint, raw=task)
+                return PerceiveResult(
+                    text=None,
+                    points=None,
+                    parsed=None,
+                    usage=None,
+                    errors=errors_with_hint,
+                    raw=task,
+                )
             if not _has_credentials(provider_name, env):
                 errors_with_hint = [*issues, _credentials_issue(provider_name)]
-                return PerceiveResult(text=None, points=None, parsed=None, usage=None, errors=errors_with_hint, raw=task)
+                return PerceiveResult(
+                    text=None,
+                    points=None,
+                    parsed=None,
+                    usage=None,
+                    errors=errors_with_hint,
+                    raw=task,
+                )
 
             resp = await client.generate(
                 task,
@@ -437,7 +482,14 @@ def async_perceive(
             text = resp.get("text")
             points = resp.get("points")
             parsed = resp.get("parsed")
-            return PerceiveResult(text=text, points=points, parsed=parsed, usage=None, errors=issues, raw=resp.get("raw"))
+            return PerceiveResult(
+                text=text,
+                points=points,
+                parsed=parsed,
+                usage=None,
+                errors=issues,
+                raw=resp.get("raw"),
+            )
 
         async def _inspect_async(*args: Any, **kwargs: Any):
             return await _prepare_nodes(*args, **kwargs)
@@ -459,7 +511,7 @@ def inspect_task(callable_obj: Callable[..., Any], *args: Any, **kwargs: Any):
     return result
 
 
-__all__ = ["perceive", "async_perceive", "PerceiveResult", "inspect_task"]
+__all__ = ["PerceiveResult", "async_perceive", "inspect_task", "perceive"]
 
 
 def _credentials_issue(provider_name: str) -> dict[str, str]:
@@ -477,7 +529,8 @@ def _credentials_issue(provider_name: str) -> dict[str, str]:
 
 
 def _has_credentials(provider_name: str, env) -> bool:
-    if provider_name == "fal":
-        return bool(env.api_key or os.getenv("FAL_KEY") or os.getenv("PERCEPTRON_API_KEY"))
-    # Unknown providers default to checking the explicit api_key hook
-    return bool(env.api_key)
+    if env.api_key:
+        return True
+
+    provider_cfg = _PROVIDER_CONFIG.get(provider_name or "") or {}
+    return any(os.getenv(env_key) for env_key in provider_cfg.get("env_keys", []))

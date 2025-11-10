@@ -2,9 +2,9 @@ import os
 
 import pytest
 
-from perceptron import detect, annotate_image, bbox, config as cfg
+from perceptron import annotate_image, bbox, detect
+from perceptron import config as cfg
 from perceptron.pointing.types import BoundingBox
-
 
 pytestmark = pytest.mark.integration
 

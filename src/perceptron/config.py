@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
-from dataclasses import dataclass, asdict
-from typing import Any
 import os
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass
+from typing import Any
 
 
 @dataclass
@@ -40,16 +40,25 @@ class Settings:
 
 
 _global_settings = Settings()
-_stack: list[Settings] = []
+_stack: list[tuple[Settings, set[str]]] = []
+_defaults = Settings()  # Track default values
+_explicit_fields: set[str] = set()  # Track which fields have been explicitly configured
 
 
 def _from_env(s: Settings) -> Settings:
-    base_url = os.getenv("PERCEPTRON_BASE_URL", s.base_url)
-    api_key = os.getenv("PERCEPTRON_API_KEY", s.api_key)
-    provider = os.getenv("PERCEPTRON_PROVIDER", s.provider)
-    # Providers
-    if provider is None and (os.getenv("FAL_KEY") or os.getenv("PERCEPTRON_API_KEY")):
+    # Only read from environment for fields that haven't been explicitly configured
+    base_url = s.base_url if "base_url" in _explicit_fields else os.getenv("PERCEPTRON_BASE_URL", s.base_url)
+    api_key = s.api_key if "api_key" in _explicit_fields else os.getenv("PERCEPTRON_API_KEY", s.api_key)
+    provider = s.provider if "provider" in _explicit_fields else os.getenv("PERCEPTRON_PROVIDER", s.provider)
+
+    # Providers - only apply default logic if provider wasn't explicitly set
+    if (
+        provider is None
+        and "provider" not in _explicit_fields
+        and (os.getenv("FAL_KEY") or os.getenv("PERCEPTRON_API_KEY"))
+    ):
         provider = "fal"
+
     return Settings(
         base_url=base_url,
         api_key=api_key,
@@ -75,24 +84,27 @@ def configure(**kwargs: Any) -> None:
     Example:
         configure(provider="fal", timeout=60)
     """
-    global _global_settings
+    global _global_settings, _explicit_fields
     for k, v in kwargs.items():
         if not hasattr(_global_settings, k):
             raise AttributeError(f"Unknown setting: {k}")
         setattr(_global_settings, k, v)
+        # Track that this field was explicitly configured
+        _explicit_fields.add(k)
 
 
 @contextmanager
 def config(**kwargs: Any):
     """Temporarily apply settings within a context."""
-    global _global_settings
-    _stack.append(Settings(**asdict(_global_settings)))
+    global _global_settings, _explicit_fields
+    _stack.append((Settings(**asdict(_global_settings)), _explicit_fields.copy()))
     try:
         configure(**kwargs)
         yield
     finally:
-        prev = _stack.pop()
-        _global_settings = prev
+        prev_settings, prev_explicit = _stack.pop()
+        _global_settings = prev_settings
+        _explicit_fields = prev_explicit
 
 
 def settings() -> Settings:

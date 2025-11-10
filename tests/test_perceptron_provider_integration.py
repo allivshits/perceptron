@@ -4,7 +4,6 @@ import pytest
 
 from perceptron import Client
 
-
 pytestmark = pytest.mark.integration
 
 _API_KEY = os.getenv("PERCEPTRON_API_KEY")
@@ -19,7 +18,11 @@ def _simple_task() -> dict:
     return {
         "content": [
             {"type": "text", "role": "system", "content": "You are a terse assistant."},
-            {"type": "text", "role": "user", "content": "Reply with the single word perceptron."},
+            {
+                "type": "text",
+                "role": "user",
+                "content": "Reply with the single word perceptron.",
+            },
         ]
     }
 

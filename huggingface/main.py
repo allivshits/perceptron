@@ -95,12 +95,16 @@ def decode_tensor_stream(tensor_stream, tokenizer):
 
     # Get text tokens (excluding vision tokens)
     text_tokens = token_view[(mod != VisionType.image.value)]
-    decoded = tokenizer.decode(text_tokens[0] if len(text_tokens.shape) > 1 else text_tokens)
+    decoded = tokenizer.decode(
+        text_tokens[0] if len(text_tokens.shape) > 1 else text_tokens
+    )
 
     return decoded
 
 
-def visualize_predictions(generated_text: str, image: PILImage.Image, output_path: str = "prediction.jpeg"):
+def visualize_predictions(
+    generated_text: str, image: PILImage.Image, output_path: str = "prediction.jpeg"
+):
     """Extract bounding boxes from generated text and render them on the input image.
 
     Args:
@@ -167,9 +171,13 @@ def visualize_predictions(generated_text: str, image: PILImage.Image, output_pat
             draw.rectangle(text_bbox, fill=color)
             draw.text((x1, text_y), box.mention, fill="white", font=font)
 
-            logger.info(f"Box {idx+1}: {box.mention} - normalized: ({norm_x1},{norm_y1}) to ({norm_x2},{norm_y2}) -> scaled: ({x1},{y1}) to ({x2},{y2})")
+            logger.info(
+                f"Box {idx + 1}: {box.mention} - normalized: ({norm_x1},{norm_y1}) to ({norm_x2},{norm_y2}) -> scaled: ({x1},{y1}) to ({x2},{y2})"
+            )
         else:
-            logger.info(f"Box {idx+1}: normalized: ({norm_x1},{norm_y1}) to ({norm_x2},{norm_y2}) -> scaled: ({x1},{y1}) to ({x2},{y2})")
+            logger.info(
+                f"Box {idx + 1}: normalized: ({norm_x1},{norm_y1}) to ({norm_x2},{norm_y2}) -> scaled: ({x1},{y1}) to ({x2},{y2})"
+            )
 
     # Save the image with bounding boxes
     img_with_boxes.save(output_path, "JPEG")
@@ -191,7 +199,9 @@ def main():
 
     # Load model from the HF checkpoint using AutoModelForCausalLM
     logger.info(f"Loading AutoModelForCausalLM from HF checkpoint: {hf_path}")
-    model = AutoModelForCausalLM.from_pretrained(hf_path, trust_remote_code=True, vision_attn_implementation="flash_attention_2")
+    model = AutoModelForCausalLM.from_pretrained(
+        hf_path, trust_remote_code=True, vision_attn_implementation="flash_attention_2"
+    )
 
     # Move to appropriate device and dtype
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -206,12 +216,16 @@ def main():
     logger.info(f"Document content: {DUMMY_DOCUMENT}")
 
     # Convert document to messages format
-    messages, images = document_to_messages(DUMMY_DOCUMENT, vision_token=config.vision_token)
+    messages, images = document_to_messages(
+        DUMMY_DOCUMENT, vision_token=config.vision_token
+    )
     logger.info(f"\nConverted to messages: {messages}")
     logger.info(f"Number of images: {len(images)}")
 
     # Apply chat template to get formatted text
-    text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    text = processor.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
     logger.info(f"\nFormatted text after chat template:\n{text}")
 
     # Process with IsaacProcessor
@@ -243,7 +257,9 @@ def main():
         logger.info(f"Generated shape: {generated_ids.shape}")
 
         # Decode full output
-        generated_text = processor.tokenizer.decode(generated_ids[0], skip_special_tokens=False)
+        generated_text = processor.tokenizer.decode(
+            generated_ids[0], skip_special_tokens=False
+        )
         logger.info(f"\nFull generated output:\n{generated_text}")
 
         # Also show just the new tokens (excluding the input)
@@ -256,7 +272,9 @@ def main():
         logger.info("\nVisualizing predictions with bounding boxes...")
         if images and len(images) > 0:
             # Use the first image for visualization
-            visualize_predictions(generated_text, images[0], output_path="prediction.jpeg")
+            visualize_predictions(
+                generated_text, images[0], output_path="prediction.jpeg"
+            )
         else:
             logger.warning("No input image available for visualization")
 

@@ -15,12 +15,15 @@ Helpers
 from __future__ import annotations
 
 import re
-from html import unescape, escape
-from typing import Any, Literal
+from contextlib import suppress
 from dataclasses import dataclass, replace
+from html import escape, unescape
+from typing import Any, Literal
 
-from .types import SinglePoint, BoundingBox, Polygon, Collection
+from .types import BoundingBox, Collection, Polygon, SinglePoint
 
+BOX_MIN_POINTS = 2
+POLYGON_MIN_POINTS = 3
 
 # Regex fragments
 _WS = r"\s*"
@@ -55,7 +58,7 @@ def _parse_point_body(body: str) -> SinglePoint:
 
 def _parse_box_body(body: str) -> BoundingBox:
     pts = list(re.finditer(_PT, body))
-    if len(pts) < 2:
+    if len(pts) < BOX_MIN_POINTS:
         raise ValueError("invalid box coords")
     x1, y1 = int(pts[0].group(1)), int(pts[0].group(2))
     x2, y2 = int(pts[1].group(1)), int(pts[1].group(2))
@@ -64,7 +67,7 @@ def _parse_box_body(body: str) -> BoundingBox:
 
 def _parse_polygon_body(body: str) -> Polygon:
     pts = [SinglePoint(int(m.group(1)), int(m.group(2))) for m in re.finditer(_PT, body)]
-    if len(pts) < 3:
+    if len(pts) < POLYGON_MIN_POINTS:
         raise ValueError("invalid polygon coords")
     return Polygon(hull=pts)
 
@@ -93,11 +96,9 @@ def _parse_collection_body(body: str) -> Collection:
             continue
         if "mention" in attrs:
             obj.mention = attrs["mention"]
-        if "t" in attrs:
-            try:
-                obj.t = float(attrs["t"])
-            except ValueError:
-                pass
+            if "t" in attrs:
+                with suppress(ValueError):
+                    obj.t = float(attrs["t"])
         items.append(obj)
         idx = m.end()
     return Collection(points=items)
@@ -155,7 +156,13 @@ def parse_text(text: str) -> list[dict[str, Any]]:
     idx = 0
     for m in _FULL_TAG.finditer(text):
         if m.start() > idx:
-            segments.append({"kind": "text", "text": text[idx : m.start()], "span": {"start": idx, "end": m.start()}})
+            segments.append(
+                {
+                    "kind": "text",
+                    "text": text[idx : m.start()],
+                    "span": {"start": idx, "end": m.start()},
+                }
+            )
         tag = m.group("tag").lower()
         inner_body = m.group("body") or ""
         tag_open = text[m.start() : m.start() + text[m.start() : m.end()].find(">") + 1]
@@ -174,15 +181,19 @@ def parse_text(text: str) -> list[dict[str, Any]]:
             kind = "collection"
         if "mention" in attrs:
             obj.mention = attrs["mention"]
-        if "t" in attrs:
-            try:
-                obj.t = float(attrs["t"])
-            except ValueError:
-                pass
+            if "t" in attrs:
+                with suppress(ValueError):
+                    obj.t = float(attrs["t"])
         segments.append({"kind": kind, "value": obj, "span": {"start": m.start(), "end": m.end()}})
         idx = m.end()
     if idx < len(text):
-        segments.append({"kind": "text", "text": text[idx:], "span": {"start": idx, "end": len(text)}})
+        segments.append(
+            {
+                "kind": "text",
+                "text": text[idx:],
+                "span": {"start": idx, "end": len(text)},
+            }
+        )
     return segments
 
 

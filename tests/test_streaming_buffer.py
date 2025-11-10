@@ -2,7 +2,9 @@ import json
 
 import pytest
 
-from perceptron import perceive, image, text, config as cfg
+from perceptron import client as client_mod
+from perceptron import config as cfg
+from perceptron import image, perceive, text
 
 
 class _MockResp:
@@ -18,8 +20,7 @@ class _MockResp:
         return False
 
     def iter_lines(self, decode_unicode=True):
-        for line in self._lines:
-            yield line
+        yield from self._lines
 
 
 def _sse(obj):
@@ -35,8 +36,6 @@ def test_stream_parsing_buffer_overflow(monkeypatch):
     @perceive(expects="point", stream=True)
     def fn(img):
         return image(img) + text("Find point")
-
-    from perceptron import client as client_mod
 
     # Construct many small deltas to exceed buffer
     chunks = []

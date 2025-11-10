@@ -1,6 +1,13 @@
 import pytest
 
-from perceptron import perceive, image, point, box
+from perceptron import box, image, perceive, point
+from perceptron import client as client_mod
+from perceptron.errors import AnchorError, ExpectationError
+
+try:
+    from PIL import Image as PILImage  # type: ignore
+except Exception:  # pragma: no cover
+    PILImage = None
 
 
 class _Stub:
@@ -12,13 +19,8 @@ class _Stub:
 
 def test_anchoring_single_image_implicit_no_issue(monkeypatch):
     # Monkeypatch client to avoid HTTP
-    from perceptron import client as client_mod
-
     monkeypatch.setattr(client_mod.Client, "generate", _Stub.generate)
-
-    try:
-        from PIL import Image as PILImage  # type: ignore
-    except Exception:
+    if PILImage is None:
         pytest.skip("PIL not available")
 
     @perceive()
@@ -33,13 +35,8 @@ def test_anchoring_single_image_implicit_no_issue(monkeypatch):
 
 
 def test_anchoring_multi_image_missing_anchor(monkeypatch):
-    from perceptron import client as client_mod
-
     monkeypatch.setattr(client_mod.Client, "generate", _Stub.generate)
-
-    try:
-        from PIL import Image as PILImage  # type: ignore
-    except Exception:
+    if PILImage is None:
         pytest.skip("PIL not available")
 
     @perceive()
@@ -58,18 +55,13 @@ def test_anchoring_multi_image_missing_anchor(monkeypatch):
         im2 = image(PILImage.new("RGB", (8, 8)))
         return im1 + im2 + point(1, 1)
 
-    with pytest.raises(Exception):  # AnchorError maps to Exception hierarchy
+    with pytest.raises(AnchorError):
         fn_strict()
 
 
 def test_bounds_point_out_of_bounds(monkeypatch):
-    from perceptron import client as client_mod
-
     monkeypatch.setattr(client_mod.Client, "generate", _Stub.generate)
-
-    try:
-        from PIL import Image as PILImage  # type: ignore
-    except Exception:
+    if PILImage is None:
         pytest.skip("PIL not available")
 
     @perceive()
@@ -85,18 +77,13 @@ def test_bounds_point_out_of_bounds(monkeypatch):
         im = image(PILImage.new("RGB", (8, 8)))
         return im + point(9, 9, image=im)
 
-    with pytest.raises(Exception):
+    with pytest.raises(ExpectationError):
         fn_strict()
 
 
 def test_bounds_box_out_of_bounds(monkeypatch):
-    from perceptron import client as client_mod
-
     monkeypatch.setattr(client_mod.Client, "generate", _Stub.generate)
-
-    try:
-        from PIL import Image as PILImage  # type: ignore
-    except Exception:
+    if PILImage is None:
         pytest.skip("PIL not available")
 
     @perceive()
@@ -106,3 +93,11 @@ def test_bounds_box_out_of_bounds(monkeypatch):
 
     res = fn_non_strict()
     assert any(e.get("code") == "bounds_out_of_range" for e in res.errors)
+
+    @perceive(strict=True)
+    def fn_strict():
+        im = image(PILImage.new("RGB", (8, 8)))
+        return im + box(0, 0, 10, 10, image=im)
+
+    with pytest.raises(ExpectationError):
+        fn_strict()

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import List, Sequence
 
 
 @dataclass(eq=True)
@@ -41,7 +41,7 @@ class BoundingBox:
 
 @dataclass(eq=True)
 class Polygon:
-    hull: List[SinglePoint]
+    hull: list[SinglePoint]
     mention: str | None = None
     t: float | None = None
 
@@ -57,7 +57,7 @@ class Polygon:
 
 @dataclass(eq=True)
 class Collection:
-    points: List[SinglePoint | BoundingBox | Polygon | "Collection"]
+    points: list[SinglePoint | BoundingBox | Polygon | Collection]
     mention: str | None = None
     t: float | None = None
 

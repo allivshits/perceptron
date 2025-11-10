@@ -21,7 +21,10 @@ from transformers import (
 )
 from transformers.cache_utils import SlidingWindowCache, StaticCache
 from transformers.generation.utils import GenerationMixin
-from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
+from transformers.modeling_outputs import (
+    BaseModelOutputWithPast,
+    CausalLMOutputWithPast,
+)
 from transformers.models.qwen3.modeling_qwen3 import Qwen3DecoderLayer, Qwen3Model
 from transformers.models.qwen2.tokenization_qwen2 import Qwen2Tokenizer
 from transformers.processing_utils import ProcessorMixin
@@ -73,7 +76,9 @@ class PixelShuffleSiglip2VisionConfig(Siglip2VisionConfig):
         self.num_patches = num_patches
 
 
-def create_cumulative_seq_lengths(seq_sizes: torch.Tensor, device: torch.device) -> tuple[torch.Tensor, int]:
+def create_cumulative_seq_lengths(
+    seq_sizes: torch.Tensor, device: torch.device
+) -> tuple[torch.Tensor, int]:
     """Create cumulative sequence lengths for variable-length attention."""
     cu_seqlens = torch.zeros(len(seq_sizes) + 1, dtype=torch.int32, device=device)
     cu_seqlens[1:] = seq_sizes.cumsum(0)
@@ -158,11 +163,19 @@ def sdpa_document_mask_forward(
     attn_mask = None
     if cu_seqlens is not None:
         seq_sizes = (cu_seqlens[1:] - cu_seqlens[:-1]).long()
-        seg_ids = torch.repeat_interleave(torch.arange(len(seq_sizes), device=q_lhd.device), seq_sizes)
-        block_mask = seg_ids[:, None] != seg_ids[None, :]  # Cross-document attention blocked
-        attn_mask = torch.where(block_mask, -torch.inf, 0.0).to(q_lhd.dtype).view(1, 1, L, L)
+        seg_ids = torch.repeat_interleave(
+            torch.arange(len(seq_sizes), device=q_lhd.device), seq_sizes
+        )
+        block_mask = (
+            seg_ids[:, None] != seg_ids[None, :]
+        )  # Cross-document attention blocked
+        attn_mask = (
+            torch.where(block_mask, -torch.inf, 0.0).to(q_lhd.dtype).view(1, 1, L, L)
+        )
 
-    Y = F.scaled_dot_product_attention(Q, K, V, attn_mask=attn_mask, dropout_p=dropout, scale=scaling)
+    Y = F.scaled_dot_product_attention(
+        Q, K, V, attn_mask=attn_mask, dropout_p=dropout, scale=scaling
+    )
     return Y.squeeze(0).permute(1, 0, 2)  # Back to (L, H, D)
 
 
@@ -187,7 +200,9 @@ class Siglip2VariableSequenceEmbeddings(nn.Module):
     ) -> torch.Tensor:
         # Prepare positional embeddings grid: (1, embed_dim, h, w)
         positional_embeddings = (
-            self.position_embedding.weight.reshape(self.position_embedding_size, self.position_embedding_size, -1)
+            self.position_embedding.weight.reshape(
+                self.position_embedding_size, self.position_embedding_size, -1
+            )
             .permute(2, 0, 1)
             .unsqueeze(0)
         )
@@ -209,11 +224,14 @@ class Siglip2VariableSequenceEmbeddings(nn.Module):
                     antialias=antialias,
                 )
                 # Reshape from (1, embed_dim, height, width) to (height*width, embed_dim)
-                resized_pos_embed = resized_pos_embed.reshape(self.embed_dim, height * width).transpose(0, 1)
+                resized_pos_embed = resized_pos_embed.reshape(
+                    self.embed_dim, height * width
+                ).transpose(0, 1)
             else:
                 # Fallback - should never happen in practice
                 resized_pos_embed = positional_embeddings.reshape(
-                    self.embed_dim, self.position_embedding_size * self.position_embedding_size
+                    self.embed_dim,
+                    self.position_embedding_size * self.position_embedding_size,
                 ).transpose(0, 1)[: height * width]
             pos_embeds_list.append(resized_pos_embed)
 
@@ -221,7 +239,9 @@ class Siglip2VariableSequenceEmbeddings(nn.Module):
         pos_embeds = torch.cat(pos_embeds_list, dim=0)
         return pos_embeds
 
-    def forward(self, packed_seq_patches: tuple[torch.Tensor, torch.Tensor, torch.Tensor]):
+    def forward(
+        self, packed_seq_patches: tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+    ):
         seq_patches, _seq_sizes, _spatial_shapes = packed_seq_patches
 
         # Apply patch embeddings
@@ -288,7 +308,9 @@ class Siglip2VariableLengthAttention(nn.Module):
                 is_causal=False,
             )
         else:
-            y_lhd = sdpa_document_mask_forward(q, k, v, dropout=p_drop, scaling=self.scale, cu_seqlens=cu_seqlens)
+            y_lhd = sdpa_document_mask_forward(
+                q, k, v, dropout=p_drop, scaling=self.scale, cu_seqlens=cu_seqlens
+            )
 
         # Merge heads and project
         y = self.out_proj(y_lhd.reshape(L, self.embed_dim))
@@ -339,7 +361,9 @@ class IsaacEncoder(nn.Module):
     def __init__(self, config: PixelShuffleSiglip2VisionConfig):
         super().__init__()
         self.config = config
-        self.layers = nn.ModuleList([IsaacSiglip2EncoderLayer(config) for _ in range(config.num_hidden_layers)])
+        self.layers = nn.ModuleList(
+            [IsaacSiglip2EncoderLayer(config) for _ in range(config.num_hidden_layers)]
+        )
 
     def forward(
         self,
@@ -404,7 +428,9 @@ def create_pixel_shuffle_index_map(
     # Safety: all spatial dims must be divisible by r
     # Cannot run under torch compile fullgraph mode hence
     if not torch.compiler.is_compiling():
-        if not ((token_grids[:, 0] % r == 0).all() and (token_grids[:, 1] % r == 0).all()):
+        if not (
+            (token_grids[:, 0] % r == 0).all() and (token_grids[:, 1] % r == 0).all()
+        ):
             raise AssertionError(
                 f"Every (H,W) in `token_grids` must be divisible by scale_factor={r}, got {token_grids.tolist()}"
             )
@@ -500,7 +526,9 @@ class Siglip2SequenceVisionTransformer(nn.Module):
         self.config = config
         self.embeddings = Siglip2VariableSequenceEmbeddings(config)
         self.encoder = IsaacEncoder(config)
-        self.post_layernorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.post_layernorm = nn.LayerNorm(
+            config.hidden_size, eps=config.layer_norm_eps
+        )
         self.pixel_shuffle_scale_factor = config.pixel_shuffle_scale_factor
 
     def forward(self, packed_seq_patches: tuple[torch.Tensor, torch.Tensor]):
@@ -514,7 +542,9 @@ class Siglip2SequenceVisionTransformer(nn.Module):
         hidden_states = hidden_states.unsqueeze(0)
 
         # Generate cumulative sequence lengths for variable-length attention
-        cu_seqlens, max_seqlen = create_cumulative_seq_lengths(seq_sizes, hidden_states.device)
+        cu_seqlens, max_seqlen = create_cumulative_seq_lengths(
+            seq_sizes, hidden_states.device
+        )
 
         # Pass through encoder with variable-length attention parameters
         hidden_states, _, _ = self.encoder(
@@ -572,7 +602,9 @@ def _make_writeable(arr: np.ndarray) -> np.ndarray:
 
 def extract_image_pil(image: PIL.Image.Image) -> torch.Tensor | None:
     if image.width * image.height > MAX_PIXELS:
-        raise ValueError(f"Image (w={image.width}, h={image.height}) > MAX=`{MAX_PIXELS}`")
+        raise ValueError(
+            f"Image (w={image.width}, h={image.height}) > MAX=`{MAX_PIXELS}`"
+        )
     img = image if image.mode == "RGB" else image.convert("RGB")
     arr = np.asarray(img)
     arr = _make_writeable(arr)
@@ -632,16 +664,24 @@ def get_image_size_for_max_num_patches(
         scale_min, scale_max = 1.0, 100.0
         while (scale_max - scale_min) >= eps:
             scale = (scale_min + scale_max) / 2
-            target_height = get_scaled_image_size(scale, image_height, patch_size, pixel_shuffle_scale)
-            target_width = get_scaled_image_size(scale, image_width, patch_size, pixel_shuffle_scale)
+            target_height = get_scaled_image_size(
+                scale, image_height, patch_size, pixel_shuffle_scale
+            )
+            target_width = get_scaled_image_size(
+                scale, image_width, patch_size, pixel_shuffle_scale
+            )
             num_patches = (target_height / patch_size) * (target_width / patch_size)
             if num_patches >= min_num_patches:
                 scale_max = scale
             else:
                 scale_min = scale
         scale = scale_max
-        target_height = get_scaled_image_size(scale, image_height, patch_size, pixel_shuffle_scale)
-        target_width = get_scaled_image_size(scale, image_width, patch_size, pixel_shuffle_scale)
+        target_height = get_scaled_image_size(
+            scale, image_height, patch_size, pixel_shuffle_scale
+        )
+        target_width = get_scaled_image_size(
+            scale, image_width, patch_size, pixel_shuffle_scale
+        )
         return target_height, target_width
     elif num_patches <= max_num_patches:
         return adjusted_height, adjusted_width
@@ -650,16 +690,24 @@ def get_image_size_for_max_num_patches(
         scale_min, scale_max = eps / 10, 1.0
         while (scale_max - scale_min) >= eps:
             scale = (scale_min + scale_max) / 2
-            target_height = get_scaled_image_size(scale, image_height, patch_size, pixel_shuffle_scale)
-            target_width = get_scaled_image_size(scale, image_width, patch_size, pixel_shuffle_scale)
+            target_height = get_scaled_image_size(
+                scale, image_height, patch_size, pixel_shuffle_scale
+            )
+            target_width = get_scaled_image_size(
+                scale, image_width, patch_size, pixel_shuffle_scale
+            )
             num_patches = (target_height / patch_size) * (target_width / patch_size)
             if num_patches <= max_num_patches:
                 scale_min = scale
             else:
                 scale_max = scale
         scale = scale_min
-        target_height = get_scaled_image_size(scale, image_height, patch_size, pixel_shuffle_scale)
-        target_width = get_scaled_image_size(scale, image_width, patch_size, pixel_shuffle_scale)
+        target_height = get_scaled_image_size(
+            scale, image_height, patch_size, pixel_shuffle_scale
+        )
+        target_width = get_scaled_image_size(
+            scale, image_width, patch_size, pixel_shuffle_scale
+        )
         return target_height, target_width
 
 
@@ -712,10 +760,24 @@ def patchify_vision(image: torch.Tensor, patch_size: int) -> torch.Tensor:
     """
     num_images, height, width, channels = image.shape
     if height % patch_size or width % patch_size:
-        raise ValueError(f"Dimensions of images {image.shape} are not divisible by patch_size={patch_size}.")
-    patches = image.reshape(num_images, height // patch_size, patch_size, width // patch_size, patch_size, channels)
+        raise ValueError(
+            f"Dimensions of images {image.shape} are not divisible by patch_size={patch_size}."
+        )
+    patches = image.reshape(
+        num_images,
+        height // patch_size,
+        patch_size,
+        width // patch_size,
+        patch_size,
+        channels,
+    )
     patches = patches.permute(0, 1, 3, 2, 4, 5)
-    patches = patches.reshape(num_images, height // patch_size, width // patch_size, channels * patch_size * patch_size)
+    patches = patches.reshape(
+        num_images,
+        height // patch_size,
+        width // patch_size,
+        channels * patch_size * patch_size,
+    )
     return patches
 
 
@@ -920,7 +982,9 @@ def create_text_event(tokenizer: AutoTokenizer, text: str, time: float = 0.0) ->
         `Event`: Event carrying a `(num_tokens, 1)` tensor of token ids with matching
         metadata so that downstream processors can compute modality-specific embeddings.
     """
-    tokens = tokenizer.encode(text, add_special_tokens=False, return_tensors="pt").squeeze(0)
+    tokens = tokenizer.encode(
+        text, add_special_tokens=False, return_tensors="pt"
+    ).squeeze(0)
 
     # Calculate dimensions for the event
     num_tokens = len(tokens)
@@ -983,7 +1047,10 @@ class IsaacProcessor(ProcessorMixin):
         **kwargs,
     ) -> Any:
         return self.tokenizer.apply_chat_template(
-            messages, tokenize=tokenize, add_generation_prompt=add_generation_prompt, **kwargs
+            messages,
+            tokenize=tokenize,
+            add_generation_prompt=add_generation_prompt,
+            **kwargs,
         )
 
     def build_event_stream_simple(
@@ -1008,7 +1075,9 @@ class IsaacProcessor(ProcessorMixin):
                     if image_tensor is not None:
                         # Create a vision event with the image tensor
                         vision_event = Event(
-                            data=image_tensor.unsqueeze(0),  # HWC format from extract_image_pil
+                            data=image_tensor.unsqueeze(
+                                0
+                            ),  # HWC format from extract_image_pil
                             type=VisionType.image,  # I-frame
                             time=(current_time, current_time),
                         )
@@ -1023,7 +1092,9 @@ class IsaacProcessor(ProcessorMixin):
         if any(event.type == VisionType.image for event in events):
             # Separate text and vision events for processing
             text_events = [event for event in events if event.type == TextType.text]
-            vision_events = [event for event in events if event.type == VisionType.image]
+            vision_events = [
+                event for event in events if event.type == VisionType.image
+            ]
 
             # Process vision events using functional approach
             processed_vision_events = []
@@ -1052,13 +1123,17 @@ class IsaacProcessor(ProcessorMixin):
                 vision_event.idx_range = (0, math.prod(dims_virtual))
 
                 # Flatten the patches
-                vision_event.data = vision_event.data.reshape(-1, vision_event.data.shape[-1])
+                vision_event.data = vision_event.data.reshape(
+                    -1, vision_event.data.shape[-1]
+                )
                 processed_vision_events.append(vision_event)
 
             events = text_events + processed_vision_events
 
         # Create stream without scheduling (events already in order)
-        return create_stream(events, priority=[TextType.text, VisionType.image], schedule=True)
+        return create_stream(
+            events, priority=[TextType.text, VisionType.image], schedule=True
+        )
 
     def __call__(
         self,
@@ -1114,7 +1189,9 @@ class IsaacProcessor(ProcessorMixin):
         # Slice to max length if needed
         _, T = tensor_stream.shape
         if T > self.max_sequence_length:
-            tensor_stream = ts_slice(tensor_stream, start=T - self.max_sequence_length, end=T)
+            tensor_stream = ts_slice(
+                tensor_stream, start=T - self.max_sequence_length, end=T
+            )
 
         # Get token view
         tokens = tensor_stream_token_view(tensor_stream)
@@ -1179,18 +1256,26 @@ class IsaacRotaryEmbedding(nn.Module):
         inv_freq = precompute_inv_freq(rope_base, self.head_dim)
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
-    def forward(self, position_ids: torch.Tensor, modality_tensor: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self, position_ids: torch.Tensor, modality_tensor: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         with torch.no_grad():
             # Ensure non-spatial tokens have 1D rotation equivalence
             not_spatial = ~(modality_tensor == VisionType.image.value)
             # shape is [N, 1]
             data_1d = position_ids[not_spatial][..., 0].unsqueeze(-1)
             # now broadcast it from [N, 1] -> [N, D] so it matches pos[not_spatial] exactly
-            data_1d = data_1d.expand(-1, position_ids.shape[-1])  # expand along the last dim
-            position_ids = position_ids.clone()  # Clone to avoid warning about in-place operations on expanded tensors
+            data_1d = data_1d.expand(
+                -1, position_ids.shape[-1]
+            )  # expand along the last dim
+            position_ids = (
+                position_ids.clone()
+            )  # Clone to avoid warning about in-place operations on expanded tensors
             position_ids[not_spatial] = data_1d
             position_ids = position_ids.permute(2, 0, 1)  # pos dim first -> (3, B, L)
-            cos, sin = precompute_cos_sin_3d(position_ids, self.inv_freq, self.mrope_section)
+            cos, sin = precompute_cos_sin_3d(
+                position_ids, self.inv_freq, self.mrope_section
+            )
 
         return cos, sin
 
@@ -1200,7 +1285,10 @@ class IsaacModel(Qwen3Model):
         super().__init__(config)
         text_cfg = getattr(config, "get_text_config", lambda: config)()
         self.layers = torch.nn.ModuleList(
-            [Qwen3DecoderLayer(text_cfg, layer_idx) for layer_idx in range(config.num_hidden_layers)]
+            [
+                Qwen3DecoderLayer(text_cfg, layer_idx)
+                for layer_idx in range(config.num_hidden_layers)
+            ]
         )
         self.rotary_emb = IsaacRotaryEmbedding(config, device=self.device)
 
@@ -1240,7 +1328,9 @@ class IsaacModel(Qwen3Model):
             h = h[..., 0, :]
         return h
 
-    def embed_vision(self, vision_tokens: tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
+    def embed_vision(
+        self, vision_tokens: tuple[torch.Tensor, torch.Tensor]
+    ) -> torch.Tensor:
         """Embed vision tokens using the vision encoder."""
         # vision tokens is (seq_patches, token_grids)
         return self.vision_embedding(vision_tokens)
@@ -1251,8 +1341,12 @@ class IsaacModel(Qwen3Model):
         structure.
         """
         flat_stream = tensor_stream.flat_stream()
-        per_modality_stream = group_streams(flat_stream, group_fn=lambda ev: ev.type, schedule=False)
-        per_modality_compact_stream = {k: v.compact() for k, v in per_modality_stream.items()}
+        per_modality_stream = group_streams(
+            flat_stream, group_fn=lambda ev: ev.type, schedule=False
+        )
+        per_modality_compact_stream = {
+            k: v.compact() for k, v in per_modality_stream.items()
+        }
 
         # Collect per-event grids for vision tokens (H, W like dims sans time)
         token_grids = defaultdict(list)
@@ -1268,14 +1362,22 @@ class IsaacModel(Qwen3Model):
                 if len(grids) == 0:
                     input_tensor = modality_payload_tensor
                 else:
-                    token_grids_tensor = torch.tensor(grids, dtype=torch.long, device=tensor_stream.device)[:, 1:]
+                    token_grids_tensor = torch.tensor(
+                        grids, dtype=torch.long, device=tensor_stream.device
+                    )[:, 1:]
                     input_tensor = (modality_payload_tensor, token_grids_tensor)
-                embedded_compact[stream_type] = self.embed_fns[stream_type.modality](input_tensor)
+                embedded_compact[stream_type] = self.embed_fns[stream_type.modality](
+                    input_tensor
+                )
             else:
-                embedded_compact[stream_type] = self.embed_fns[stream_type.modality](modality_payload_tensor)
+                embedded_compact[stream_type] = self.embed_fns[stream_type.modality](
+                    modality_payload_tensor
+                )
 
         # Reconstruct a TensorStream with embedded payloads and compact
-        embedded_ts = reconstruct_tensor_stream_from_compact_dict(tensor_stream, embedded_compact)
+        embedded_ts = reconstruct_tensor_stream_from_compact_dict(
+            tensor_stream, embedded_compact
+        )
         h = embedded_ts.compact()  # (B, T, D)
         return h
 
@@ -1300,10 +1402,14 @@ class IsaacModel(Qwen3Model):
         Computes position embeddings once and passes them through all layers.
         """
         output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
         )
         use_cache = use_cache if use_cache is not None else self.config.use_cache
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         # Get inputs
         if tensor_stream is not None and inputs_embeds is not None:
@@ -1315,17 +1421,24 @@ class IsaacModel(Qwen3Model):
             if modality_tensor is None:
                 modality_tensor = modality_mask(tensor_stream)
         elif input_ids is not None and inputs_embeds is not None:
-            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
+            raise ValueError(
+                "You cannot specify both input_ids and inputs_embeds at the same time"
+            )
         elif input_ids is not None:
             inputs_embeds = self.embed_tokens(input_ids)
             # Create text modality tensor if not provided
             if modality_tensor is None:
                 batch_size, seq_length = input_ids.shape
                 modality_tensor = torch.full(
-                    (batch_size, seq_length), TextType.text.value, device=input_ids.device, dtype=torch.long
+                    (batch_size, seq_length),
+                    TextType.text.value,
+                    device=input_ids.device,
+                    dtype=torch.long,
                 )
         elif inputs_embeds is None:
-            raise ValueError("You have to specify either tensor_stream, input_ids or inputs_embeds")
+            raise ValueError(
+                "You have to specify either tensor_stream, input_ids or inputs_embeds"
+            )
 
         # Create default position_ids if not provided
         if position_ids is None:
@@ -1360,7 +1473,9 @@ class IsaacModel(Qwen3Model):
                 **kwargs,
             )
 
-            hidden_states = layer_outputs[0] if isinstance(layer_outputs, tuple) else layer_outputs
+            hidden_states = (
+                layer_outputs[0] if isinstance(layer_outputs, tuple) else layer_outputs
+            )
 
         # Final layer norm
         hidden_states = self.norm(hidden_states)
@@ -1380,7 +1495,9 @@ class IsaacModel(Qwen3Model):
     ):
         if self.config._attn_implementation == "flash_attention_2":
             if attention_mask is not None and past_key_values is not None:
-                is_padding_right = attention_mask[:, -1].sum().item() != input_tensor.size()[0]
+                is_padding_right = (
+                    attention_mask[:, -1].sum().item() != input_tensor.size()[0]
+                )
                 if is_padding_right:
                     raise ValueError(
                         "You are attempting to perform batched generation with padding_side='right'"
@@ -1394,7 +1511,9 @@ class IsaacModel(Qwen3Model):
         # For SDPA, when possible, we will rely on its `is_causal` argument instead of its `attn_mask` argument, in
         # order to dispatch on Flash Attention 2. This feature is not compatible with static cache, as SDPA will fail
         # to infer the attention mask.
-        past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+        past_seen_tokens = (
+            past_key_values.get_seq_length() if past_key_values is not None else 0
+        )
         using_static_cache = isinstance(past_key_values, StaticCache)
         using_sliding_window_cache = isinstance(past_key_values, SlidingWindowCache)
 
@@ -1449,7 +1568,9 @@ class IsaacModel(Qwen3Model):
             # Attend to all tokens in fully masked rows in the causal_mask, for example the relevant first rows when
             # using left padding. This is required by F.scaled_dot_product_attention memory-efficient attention path.
             # Details: https://github.com/pytorch/pytorch/issues/110213
-            causal_mask = AttentionMaskConverter._unmask_unattended(causal_mask, min_dtype)
+            causal_mask = AttentionMaskConverter._unmask_unattended(
+                causal_mask, min_dtype
+            )
 
         return causal_mask
 
@@ -1494,30 +1615,42 @@ class IsaacModel(Qwen3Model):
             causal_mask = attention_mask
         else:
             min_dtype = torch.finfo(dtype).min
-            causal_mask = torch.full((sequence_length, target_length), fill_value=min_dtype, dtype=dtype, device=device)
-            diagonal_attend_mask = torch.arange(target_length, device=device) > cache_position.reshape(-1, 1)
+            causal_mask = torch.full(
+                (sequence_length, target_length),
+                fill_value=min_dtype,
+                dtype=dtype,
+                device=device,
+            )
+            diagonal_attend_mask = torch.arange(
+                target_length, device=device
+            ) > cache_position.reshape(-1, 1)
             if config.sliding_window is not None:
                 # if we have sliding window, we should not attend to tokens beyond sliding window length, so we mask them out also
                 # the check is needed to verify is current checkpoint was trained with sliding window or not
-                if not isinstance(past_key_values, SlidingWindowCache) or sequence_length > target_length:
-                    sliding_attend_mask = torch.arange(target_length, device=device) <= (
-                        cache_position.reshape(-1, 1) - config.sliding_window
-                    )
+                if (
+                    not isinstance(past_key_values, SlidingWindowCache)
+                    or sequence_length > target_length
+                ):
+                    sliding_attend_mask = torch.arange(
+                        target_length, device=device
+                    ) <= (cache_position.reshape(-1, 1) - config.sliding_window)
                     diagonal_attend_mask.bitwise_or_(sliding_attend_mask)
             causal_mask *= diagonal_attend_mask
             causal_mask = causal_mask[None, None, :, :].expand(batch_size, 1, -1, -1)
             if attention_mask is not None:
-                causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
+                causal_mask = (
+                    causal_mask.clone()
+                )  # copy to contiguous memory for in-place edit
                 if attention_mask.shape[-1] > target_length:
                     attention_mask = attention_mask[:, :target_length]
                 mask_length = attention_mask.shape[-1]
-                padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :].to(
-                    causal_mask.device
-                )
+                padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[
+                    :, None, None, :
+                ].to(causal_mask.device)
                 padding_mask = padding_mask == 0
-                causal_mask[:, :, :, :mask_length] = causal_mask[:, :, :, :mask_length].masked_fill(
-                    padding_mask, min_dtype
-                )
+                causal_mask[:, :, :, :mask_length] = causal_mask[
+                    :, :, :, :mask_length
+                ].masked_fill(padding_mask, min_dtype)
         return causal_mask
 
 
@@ -1549,7 +1682,9 @@ class IsaacForConditionalGeneration(Qwen3ForCausalLM, GenerationMixin):
         """
         # tensor_stream present: compute 3D coords
         if tensor_stream is None and input_ids is None:
-            raise ValueError("`tensor_stream` or `input_ids` must be provided to compute rope indices")
+            raise ValueError(
+                "`tensor_stream` or `input_ids` must be provided to compute rope indices"
+            )
 
         if tensor_stream is not None:
             pos_3d = compute_mrope_pos_tensor(tensor_stream)  # (B,L,3)
@@ -1564,7 +1699,11 @@ class IsaacForConditionalGeneration(Qwen3ForCausalLM, GenerationMixin):
         if attention_mask is None:
             seq_lens = torch.full_like(m_per_batch, L)
         else:
-            seq_lens = attention_mask.eq(1).sum(dim=-1).to(dtype=m_per_batch.dtype, device=m_per_batch.device)
+            seq_lens = (
+                attention_mask.eq(1)
+                .sum(dim=-1)
+                .to(dtype=m_per_batch.dtype, device=m_per_batch.device)
+            )
 
         rope_deltas = (m_per_batch + 1 - seq_lens).to(dtype=pos_3d.dtype).unsqueeze(1)
         return pos_3d, rope_deltas
@@ -1593,13 +1732,17 @@ class IsaacForConditionalGeneration(Qwen3ForCausalLM, GenerationMixin):
         if tensor_stream is not None:
             input_ids = None
         if input_ids is None and inputs_embeds is None and tensor_stream is None:
-            raise ValueError("Either input_ids, inputs_embeds, or tensor_stream must be provided.")
+            raise ValueError(
+                "Either input_ids, inputs_embeds, or tensor_stream must be provided."
+            )
 
         # Build position ids (MRoPE) if needed and tensor_stream is available
         # During decode we reuse `self.rope_deltas` computed on the initial forward pass; `rope_delta` captures how far
         # cached rotary phases have progressed so we can advance `position_ids` without rebuilding the TensorStream.
         if position_ids is None and tensor_stream is not None:
-            position_ids, self.rope_deltas = self.get_rope_index(input_ids, tensor_stream, attention_mask)
+            position_ids, self.rope_deltas = self.get_rope_index(
+                input_ids, tensor_stream, attention_mask
+            )
         elif position_ids is None and input_ids is not None:
             # For text inputs build position ids and modality tensor
             position_ids = compute_position_ids_input_ids(input_ids)
@@ -1609,16 +1752,22 @@ class IsaacForConditionalGeneration(Qwen3ForCausalLM, GenerationMixin):
                 rope_delta = (cache_position[0] + self.rope_deltas).to(input_ids.device)
             else:
                 rope_delta = 0
-            if cache_position is not None and not isinstance(rope_delta, int):  # otherwise `deltas` is an int `0`
+            if cache_position is not None and not isinstance(
+                rope_delta, int
+            ):  # otherwise `deltas` is an int `0`
                 batch_size = input_ids.shape[0]
-                rope_delta = rope_delta.repeat_interleave(batch_size // rope_delta.shape[0], dim=0)
+                rope_delta = rope_delta.repeat_interleave(
+                    batch_size // rope_delta.shape[0], dim=0
+                )
             position_ids = position_ids.add(rope_delta)
 
         if tensor_stream is not None:
             modality_tensor = modality_mask(tensor_stream)
         else:
             batch_size, seq_len = input_ids.shape
-            modality_tensor = torch.empty(batch_size, seq_len, device=position_ids.device).fill_(TextType.text.value)
+            modality_tensor = torch.empty(
+                batch_size, seq_len, device=position_ids.device
+            ).fill_(TextType.text.value)
 
         outputs = self.model(
             input_ids=input_ids,
@@ -1640,7 +1789,9 @@ class IsaacForConditionalGeneration(Qwen3ForCausalLM, GenerationMixin):
 
         loss = None
         if labels is not None:
-            loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size)
+            loss = self.loss_function(
+                logits=logits, labels=labels, vocab_size=self.config.vocab_size
+            )
 
         return CausalLMOutputWithPast(
             loss=loss,
@@ -1678,7 +1829,9 @@ class IsaacForConditionalGeneration(Qwen3ForCausalLM, GenerationMixin):
         )
 
         # Handle TensorStream for first forward pass only
-        if tensor_stream is not None and (cache_position is None or cache_position[0] == 0):
+        if tensor_stream is not None and (
+            cache_position is None or cache_position[0] == 0
+        ):
             model_inputs["tensor_stream"] = tensor_stream
         # Let forward rebuild position_ids using cached deltas during decode
         model_inputs["position_ids"] = None
