@@ -57,10 +57,11 @@ def _prompt_profile_from_kwargs(gen_kwargs: Mapping[str, Any]) -> tuple[HighLeve
     provider_override = gen_kwargs.get("provider")
     provider_name = provider_override or env.provider or "fal"
     provider_key = provider_name.lower() if isinstance(provider_name, str) else provider_name
-    provider_cfg = dict(_PROVIDER_CONFIG.get(provider_key or "") or {})
-    provider_cfg.setdefault("name", provider_key or "fal")
+    provider_cfg = _PROVIDER_CONFIG.get(provider_key or "") or {}
     requested_model = gen_kwargs.get("model")
-    resolved_model = _select_model(provider_cfg, requested_model) or provider_cfg.get("default_model")
+    resolved_model = _select_model(provider_cfg, requested_model, provider_name=provider_key or "fal")
+    if resolved_model is None:
+        resolved_model = provider_cfg.get("default_model")
     profile = resolve_prompt_profile(resolved_model)
     return profile, resolved_model
 
@@ -226,22 +227,13 @@ def _ocr_sequence(
     image_obj: Any,
     prompt: str | None,
     template: OcrPromptTemplate,
-    mode: str,
 ) -> SequenceNode:
-    template_prompt = template.prompts.get(mode) or template.prompts.get(template.default_mode)
-    if template_prompt is None and template.prompts:
-        for candidate in template.prompts.values():
-            if candidate:
-                template_prompt = candidate
-                break
-    base_instruction = prompt if prompt is not None else template_prompt
     nodes = []
     if template.system_instruction:
         nodes.append(system(template.system_instruction))
-    im = image_node(image_obj)
-    nodes.append(im)
-    if base_instruction:
-        nodes.append(text(base_instruction))
+    nodes.append(image_node(image_obj))
+    if prompt:
+        nodes.append(text(prompt))
     return SequenceNode(nodes)
 
 
@@ -253,8 +245,18 @@ def _run_ocr(
     mode: str,
     gen_kwargs: dict[str, Any],
 ):
-    profile, _ = _prompt_profile_from_kwargs(gen_kwargs)
+    profile, resolved_model = _prompt_profile_from_kwargs(gen_kwargs)
     ocr_template = profile.ocr
+    effective_prompt = prompt
+    if effective_prompt is None:
+        available_modes = set(ocr_template.prompts.keys())
+        if mode not in ocr_template.prompts:
+            model_label = resolved_model or profile.key
+            available_display = ", ".join(sorted(available_modes)) or "none"
+            raise BadRequestError(
+                f"OCR mode '{mode}' is not configured for model '{model_label}'. Available modes: {available_display}."
+            )
+        effective_prompt = ocr_template.prompts.get(mode)
     perceive_kwargs: dict[str, Any] = {
         "stream": stream,
         "expects": None,
@@ -265,7 +267,7 @@ def _run_ocr(
 
     @reader
     def _run():
-        return _ocr_sequence(image_obj, prompt, ocr_template, mode)
+        return _ocr_sequence(image_obj, effective_prompt, ocr_template)
 
     return _run()
 
