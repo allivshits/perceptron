@@ -4,7 +4,14 @@ from typing import Any
 
 import torch
 
-from .tensorstream import Event, ModalityType, Stream, TensorStream, create_stream, group_streams
+from .tensorstream import (
+    Event,
+    ModalityType,
+    Stream,
+    TensorStream,
+    create_stream,
+    group_streams,
+)
 
 
 def compute_mrope_pos_tensor(ts: TensorStream, n_pos_dims: int = 3) -> torch.Tensor:
@@ -209,7 +216,7 @@ def slice(tensor_stream: TensorStream, start: int, end: int) -> TensorStream:
     Return a new TensorStream that contains *only* the tokens in the
     half-open interval ``[start, end)`` (0-based, inclusive-exclusive).
     """
-    B, T = tensor_stream.shape
+    _batch, T = tensor_stream.shape
     assert 0 <= start <= end <= T, f"slice [{start}, {end}) is out of bounds for sequence length {T}"
 
     sliced_streams: list[Stream] = []
@@ -226,7 +233,10 @@ def slice(tensor_stream: TensorStream, start: int, end: int) -> TensorStream:
 
             # ev_start, ev_end are the start and end indicies of the
             # event within the tensor stream token dim
-            global_ev_start, global_ev_end = curr_global_index, curr_global_index + ev_len
+            global_ev_start, global_ev_end = (
+                curr_global_index,
+                curr_global_index + ev_len,
+            )
 
             if global_ev_end <= start:
                 # The event occurs before the start skip it and move the cursor

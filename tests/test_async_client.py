@@ -97,8 +97,7 @@ def test_async_generate(monkeypatch):
 def test_async_stream(monkeypatch):
     stream_lines = [
         "data: " + json.dumps({"choices": [{"delta": {"content": "Hello "}}]}),
-        "data: "
-        + json.dumps({"choices": [{"delta": {"content": "<point> (1,2) </point>"}}]}),
+        "data: " + json.dumps({"choices": [{"delta": {"content": "<point> (1,2) </point>"}}]}),
         "data: [DONE]",
     ]
     response = _StubResponse(

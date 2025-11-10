@@ -2,33 +2,46 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any
 
-from .dsl.nodes import Sequence as SequenceNode, agent, image as image_node, system, text
+from .annotations import canonicalize_text_collections, serialize_annotations
+from .dsl.nodes import (
+    Sequence as SequenceNode,
+)
+from .dsl.nodes import (
+    agent,
+    system,
+    text,
+)
+from .dsl.nodes import (
+    image as image_node,
+)
 from .dsl.perceive import perceive
 from .errors import BadRequestError
-from .annotations import serialize_annotations, canonicalize_text_collections
 from .pointing.types import bbox
+
+COCO_BBOX_MIN_VALUES = 4
 
 
 @dataclass
 class _NormalizedExample:
     image: Any
-    prompt: Optional[str]
+    prompt: str | None
     tags: str
 
 
 @dataclass
 class CocoDetectResult:
     image_path: Path
-    coco_image: Dict[str, Any]
+    coco_image: dict[str, Any]
     result: Any
 
 
-def _normalize_examples(examples: Sequence[Any], class_order: Sequence[str] | None) -> List[_NormalizedExample]:
-    normalized: List[_NormalizedExample] = []
+def _normalize_examples(examples: Sequence[Any], class_order: Sequence[str] | None) -> list[_NormalizedExample]:
+    normalized: list[_NormalizedExample] = []
     order_lookup = {label: idx for idx, label in enumerate(class_order)} if class_order else None
     for example in examples:
         if isinstance(example, dict) and "image" in example:
@@ -51,7 +64,7 @@ def _normalize_examples(examples: Sequence[Any], class_order: Sequence[str] | No
     return normalized
 
 
-def _expectation_hint_text(expects: Optional[str]) -> Optional[str]:
+def _expectation_hint_text(expects: str | None) -> str | None:
     if expects in {"point", "box", "polygon"}:
         return f"<hint>{expects.upper()}</hint>"
     return None
@@ -62,7 +75,7 @@ def _expectation_hint_text(expects: Optional[str]) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-def _caption_sequence(image_obj: Any, style: str, expects: Optional[str]) -> SequenceNode:
+def _caption_sequence(image_obj: Any, style: str, expects: str | None) -> SequenceNode:
     style_map = {
         "concise": "Provide a concise, human-friendly caption for the upcoming image.",
         "detailed": "Provide a detailed caption describing key objects, relationships, and context in the upcoming image.",
@@ -93,10 +106,14 @@ def caption(
     if normalized not in valid:
         raise BadRequestError(f"Unsupported caption expects value: {expects}")
 
-    structured_expectation: Optional[str] = normalized if normalized in {"point", "box", "polygon"} else None
+    structured_expectation: str | None = normalized if normalized in {"point", "box", "polygon"} else None
     allow_multiple = structured_expectation is not None
 
-    perceive_kwargs: dict[str, Any] = {"stream": stream, "expects": structured_expectation, "allow_multiple": allow_multiple}
+    perceive_kwargs: dict[str, Any] = {
+        "stream": stream,
+        "expects": structured_expectation,
+        "allow_multiple": allow_multiple,
+    }
     perceive_kwargs.update(gen_kwargs)
     captioner = perceive(**perceive_kwargs)
 
@@ -115,7 +132,7 @@ def caption(
 def _question_sequence(
     image_obj: Any,
     question_text: str,
-    expects: Optional[str],
+    expects: str | None,
 ) -> SequenceNode:
     if expects in {"point", "box", "polygon"}:
         system_instruction = (
@@ -149,7 +166,7 @@ def question(
     if normalized not in valid:
         raise BadRequestError(f"Unsupported expects value: {expects}")
 
-    structured_expectation: Optional[str] = normalized if normalized in {"point", "box", "polygon"} else None
+    structured_expectation: str | None = normalized if normalized in {"point", "box", "polygon"} else None
     allow_multiple = structured_expectation is not None
 
     perceive_kwargs: dict[str, Any] = {
@@ -174,7 +191,7 @@ def question(
 
 def _ocr_sequence(
     image_obj: Any,
-    prompt: Optional[str],
+    prompt: str | None,
 ) -> SequenceNode:
     base_instruction = prompt or "Transcribe every readable word in the image."
     system_instruction = "You are an OCR (Optical Character Recognition) system. Accurately detect, extract, and transcribe all readable text from the image."
@@ -187,13 +204,17 @@ def _ocr_sequence(
 def ocr(
     image_obj: Any,
     *,
-    prompt: Optional[str] = None,
+    prompt: str | None = None,
     stream: bool = False,
     **gen_kwargs: Any,
 ):
     """Perform OCR on an image."""
 
-    perceive_kwargs: dict[str, Any] = {"stream": stream, "expects": None, "allow_multiple": False}
+    perceive_kwargs: dict[str, Any] = {
+        "stream": stream,
+        "expects": None,
+        "allow_multiple": False,
+    }
     perceive_kwargs.update(gen_kwargs)
     reader = perceive(**perceive_kwargs)
 
@@ -236,7 +257,7 @@ def _detect_sequence(
     return sequence
 
 
-def detect(
+def detect(  # noqa: PLR0913
     image_obj: Any,
     *,
     classes: Sequence[str] | None = None,
@@ -275,10 +296,10 @@ def detect(
 def _load_coco_annotations(
     dataset_dir: Path,
     *,
-    annotation_file: Optional[Path],
-    split: Optional[str],
-) -> Tuple[Path, Dict[str, Any]]:
-    def _is_coco_payload(payload: Dict[str, Any]) -> bool:
+    annotation_file: Path | None,
+    split: str | None,
+) -> tuple[Path, dict[str, Any]]:
+    def _is_coco_payload(payload: dict[str, Any]) -> bool:
         return isinstance(payload, dict) and "images" in payload and "annotations" in payload
 
     if annotation_file:
@@ -290,8 +311,8 @@ def _load_coco_annotations(
             raise BadRequestError(f"Annotation file does not appear to be COCO formatted: {ann_path}")
         return ann_path, payload
 
-    candidates: List[Path] = []
-    search_roots: List[Path] = []
+    candidates: list[Path] = []
+    search_roots: list[Path] = []
     if split:
         split_dir = dataset_dir / split
         if split_dir.exists():
@@ -319,8 +340,8 @@ def _load_coco_annotations(
     return ann_path, payload
 
 
-def _candidate_image_roots(dataset_dir: Path, split: Optional[str]) -> Iterable[Path]:
-    roots: List[Path] = []
+def _candidate_image_roots(dataset_dir: Path, split: str | None) -> Iterable[Path]:
+    roots: list[Path] = []
     if split:
         roots.append(dataset_dir / split / "images")
         roots.append(dataset_dir / split)
@@ -333,9 +354,7 @@ def _candidate_image_roots(dataset_dir: Path, split: Optional[str]) -> Iterable[
             yield root
 
 
-def _resolve_coco_image_path(
-    dataset_dir: Path, file_name: str, *, split: Optional[str]
-) -> Path:
+def _resolve_coco_image_path(dataset_dir: Path, file_name: str, *, split: str | None) -> Path:
     image_name = Path(file_name)
     if image_name.is_absolute():
         return image_name
@@ -349,20 +368,20 @@ def _resolve_coco_image_path(
     return fallback
 
 
-def _sorted_categories(categories: Sequence[Dict[str, Any]]) -> List[str]:
+def _sorted_categories(categories: Sequence[dict[str, Any]]) -> list[str]:
     sorted_categories = sorted(categories, key=lambda cat: cat.get("id", 0))
     return [cat.get("name") for cat in sorted_categories if cat.get("name")]
 
 
-def _build_coco_examples(
+def _build_coco_examples(  # noqa: PLR0912, PLR0913, PLR0915
     dataset_path: Path,
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     *,
     allowed_category_ids: Sequence[int],
     category_names: Sequence[str],
-    split: Optional[str],
+    split: str | None,
     shots: int,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     if shots <= 0:
         return []
 
@@ -375,14 +394,14 @@ def _build_coco_examples(
     category_by_id = {cat.get("id"): cat for cat in payload.get("categories", []) if cat.get("id") is not None}
 
     # Map image_id -> list of bounding boxes
-    annotations_by_image: Dict[int, List[Any]] = defaultdict(list)
+    annotations_by_image: dict[int, list[Any]] = defaultdict(list)
     for ann in annotations:
         image_id = ann.get("image_id")
         category_id = ann.get("category_id")
         if image_id not in image_meta_by_id or category_id not in allowed_category_ids:
             continue
         bbox_values = ann.get("bbox")
-        if not bbox_values or len(bbox_values) < 4:
+        if not bbox_values or len(bbox_values) < COCO_BBOX_MIN_VALUES:
             continue
         x, y, width, height = bbox_values[:4]
         x2 = x + width
@@ -391,10 +410,10 @@ def _build_coco_examples(
         if not name:
             continue
         box = bbox(
-            int(round(x)),
-            int(round(y)),
-            int(round(x2)),
-            int(round(y2)),
+            round(x),
+            round(y),
+            round(x2),
+            round(y2),
             mention=name,
         )
         annotations_by_image[image_id].append(box)
@@ -402,13 +421,17 @@ def _build_coco_examples(
     if not annotations_by_image:
         return []
 
-    category_to_images: Dict[str, List[int]] = defaultdict(list)
+    category_to_images: dict[str, list[int]] = defaultdict(list)
     for image_id, boxes in annotations_by_image.items():
         mentions = {box.mention for box in boxes if box.mention}
         for mention in mentions:
             category_to_images[mention].append(image_id)
 
-    ordered_categories = list(category_names) if category_names else list({box.mention for boxes in annotations_by_image.values() for box in boxes if box.mention})
+    ordered_categories = (
+        list(category_names)
+        if category_names
+        else list({box.mention for boxes in annotations_by_image.values() for box in boxes if box.mention})
+    )
     if not ordered_categories:
         return []
 
@@ -416,9 +439,9 @@ def _build_coco_examples(
     for cat in category_to_images.values():
         cat.sort()
 
-    examples: List[Dict[str, Any]] = []
+    examples: list[dict[str, Any]] = []
     used_images: set[int] = set()
-    category_positions: Dict[str, int] = defaultdict(int)
+    category_positions: dict[str, int] = defaultdict(int)
 
     while len(examples) < shots:
         added = False
@@ -459,7 +482,7 @@ def _build_coco_examples(
     return examples
 
 
-def detect_from_coco(
+def detect_from_coco(  # noqa: PLR0913
     dataset_dir: str | Path,
     *,
     annotation_file: str | Path | None = None,
@@ -469,12 +492,12 @@ def detect_from_coco(
     stream: bool = False,
     shots: int = 0,
     **detect_kwargs: Any,
-) -> List[CocoDetectResult]:
+) -> list[CocoDetectResult]:
     """Run detection across a COCO-format dataset directory."""
 
     if stream:
         raise BadRequestError("detect_from_coco does not support streaming output.")
-    
+
     dataset_path = Path(dataset_dir)
     if not dataset_path.exists():
         raise FileNotFoundError(f"Dataset directory not found: {dataset_path}")
@@ -488,18 +511,12 @@ def detect_from_coco(
 
     categories = payload.get("categories") or []
     category_by_id = {cat.get("id"): cat for cat in categories if cat.get("id") is not None}
-    name_to_id = {
-        cat.get("name"): cat_id
-        for cat_id, cat in category_by_id.items()
-        if cat.get("name")
-    }
+    name_to_id = {cat.get("name"): cat_id for cat_id, cat in category_by_id.items() if cat.get("name")}
 
     if classes:
         missing = [name for name in classes if name not in name_to_id]
         if missing:
-            raise BadRequestError(
-                "Classes not found in COCO categories: " + ", ".join(sorted(missing))
-            )
+            raise BadRequestError("Classes not found in COCO categories: " + ", ".join(sorted(missing)))
         category_names = list(classes)
     else:
         category_names = _sorted_categories(categories)
@@ -523,7 +540,7 @@ def detect_from_coco(
         shots=shots,
     )
 
-    results: List[CocoDetectResult] = []
+    results: list[CocoDetectResult] = []
     for image_meta in ordered_images:
         file_name = image_meta.get("file_name")
         if not file_name:

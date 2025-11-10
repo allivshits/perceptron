@@ -1,9 +1,10 @@
 import json
 
-from perceptron import detect, annotate_image, detect_from_coco
-from perceptron.pointing.types import bbox, SinglePoint, collection
+from perceptron import annotate_image, detect, detect_from_coco
+from perceptron import client as client_mod
 from perceptron import config as cfg
 from perceptron.highlevel import CocoDetectResult
+from perceptron.pointing.types import SinglePoint, bbox, collection
 
 
 class _StubClient:
@@ -27,11 +28,11 @@ class _FakeResponse:
 
 
 def test_detect_compile_only(monkeypatch):
-    from perceptron import client as client_mod
-
     monkeypatch.setattr(client_mod.Client, "generate", _StubClient.generate)
 
-    res = detect(b"\x89PNG\r\n\x1a\n" + b"0" * 10, classes=["person"], max_tokens=16)
+    # Run in compile-only mode by clearing credentials
+    with cfg(api_key=None, provider=None):
+        res = detect(b"\x89PNG\r\n\x1a\n" + b"0" * 10, classes=["person"], max_tokens=16)
     assert res.raw and isinstance(res.raw, dict)
     roles = [item.get("role") for item in res.raw.get("content", [])]
     assert roles and roles[0] == "system"
@@ -39,15 +40,15 @@ def test_detect_compile_only(monkeypatch):
 
 
 def test_detect_with_examples(monkeypatch):
-    from perceptron import client as client_mod
-
     monkeypatch.setattr(client_mod.Client, "generate", _StubClient.generate)
 
     example = annotate_image(
         b"\x89PNG\r\n\x1a\n" + b"0" * 12,
         [bbox(1, 2, 3, 4, mention="car")],
     )
-    res = detect(b"\x89PNG\r\n\x1a\n" + b"1" * 12, classes=["car"], examples=[example])
+    # Run in compile-only mode by clearing credentials
+    with cfg(api_key=None, provider=None):
+        res = detect(b"\x89PNG\r\n\x1a\n" + b"1" * 12, classes=["car"], examples=[example])
     content = res.raw.get("content", [])
     # Should include example turns before target image
     assistants = [item for item in content if item.get("role") == "assistant"]
@@ -55,8 +56,6 @@ def test_detect_with_examples(monkeypatch):
 
 
 def test_detect_with_collection_examples(monkeypatch):
-    from perceptron import client as client_mod
-
     monkeypatch.setattr(client_mod.Client, "generate", _StubClient.generate)
 
     example = annotate_image(
@@ -72,7 +71,9 @@ def test_detect_with_collection_examples(monkeypatch):
         ],
     )
 
-    res = detect(b"\x89PNG\r\n\x1a\n" + b"4" * 12, classes=["group"], examples=[example])
+    # Run in compile-only mode by clearing credentials
+    with cfg(api_key=None, provider=None):
+        res = detect(b"\x89PNG\r\n\x1a\n" + b"4" * 12, classes=["group"], examples=[example])
     content = res.raw.get("content", [])
     assistants = [item for item in content if item.get("role") == "assistant"]
     assert assistants and "<collection" in assistants[0]["content"]
@@ -81,10 +82,14 @@ def test_detect_with_collection_examples(monkeypatch):
 def test_detect_canonicalizes_collection_order():
     example = annotate_image(
         b"img",
-        {"car": [bbox(1, 2, 3, 4, mention="car")], "person": [bbox(5, 6, 7, 8, mention="person")]},
+        {
+            "car": [bbox(1, 2, 3, 4, mention="car")],
+            "person": [bbox(5, 6, 7, 8, mention="person")],
+        },
     )
 
-    with cfg(provider=None):
+    # Run in compile-only mode by clearing credentials
+    with cfg(api_key=None, provider=None):
         res = detect(b"target", classes=["person", "car"], examples=[example])
 
     assistant = next(item for item in res.raw["content"] if item.get("role") == "assistant")
@@ -106,13 +111,14 @@ def test_detect_sorts_collection_children():
         ],
     )
 
-    with cfg(provider=None):
+    # Run in compile-only mode by clearing credentials
+    with cfg(api_key=None, provider=None):
         res = detect(b"target", classes=["group"], examples=[example])
 
     assistant = next(item for item in res.raw["content"] if item.get("role") == "assistant")
     content = assistant["content"]
-    first_idx = content.index('(10,20) (30,40)')
-    second_idx = content.index('(50,60) (70,80)')
+    first_idx = content.index("(10,20) (30,40)")
+    second_idx = content.index("(50,60) (70,80)")
     assert first_idx < second_idx
 
 
@@ -152,21 +158,20 @@ def test_prompt_collection_canonicalization():
     example = {
         "image": b"img",
         "collections": [collection([bbox(5, 5, 10, 10)], mention="group")],
-        "prompt": "context <collection mention=\"group\"> <point_box> (20,20) (30,30) </point_box> <point_box> (10,10) (15,15) </point_box> </collection>",
+        "prompt": 'context <collection mention="group"> <point_box> (20,20) (30,30) </point_box> <point_box> (10,10) (15,15) </point_box> </collection>',
     }
 
-    with cfg(provider=None):
+    # Run in compile-only mode by clearing credentials
+    with cfg(api_key=None, provider=None):
         res = detect(b"target", classes=["group"], examples=[example])
 
     prompt_text = next(
         item for item in res.raw["content"] if item.get("role") == "user" and "context" in item.get("content", "")
     )["content"]
-    assert prompt_text.index('(10,10) (15,15)') < prompt_text.index('(20,20) (30,30)')
+    assert prompt_text.index("(10,10) (15,15)") < prompt_text.index("(20,20) (30,30)")
 
 
 def test_detect_stream(monkeypatch):
-    from perceptron import client as client_mod
-
     monkeypatch.setattr(client_mod.Client, "stream", _StubClient.stream)
 
     events = list(detect(b"\x89PNG\r\n\x1a\n" + b"2" * 12, classes=None, stream=True))
@@ -175,8 +180,6 @@ def test_detect_stream(monkeypatch):
 
 
 def test_detect_flattens_collection_response(monkeypatch):
-    from perceptron import client as client_mod, config as cfg
-
     payload = {
         "choices": [
             {
@@ -311,8 +314,6 @@ def test_detect_from_coco_shots(monkeypatch, tmp_path):
 
 
 def test_examples_icl_detection_sequence(monkeypatch):
-    from perceptron import client as client_mod
-
     captured: dict[str, dict] = {}
 
     def _mock_generate(self, task, **kwargs):

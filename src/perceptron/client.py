@@ -13,30 +13,29 @@ Streaming yields SSE `data:` lines and maps them to:
 
 from __future__ import annotations
 
-import os
-from typing import Any, Dict, List, Optional
-
 import json
+import os
+from typing import Any
 
 import httpx
 
 from .config import settings
 from .errors import (
-    SDKError,
-    TransportError,
-    TimeoutError,
     AuthError,
-    RateLimitError,
-    ServerError,
     BadRequestError,
+    RateLimitError,
+    SDKError,
+    ServerError,
+    TimeoutError,
+    TransportError,
 )
-from .pointing.parser import extract_points, parse_text, extract_reasoning
+from .pointing.parser import extract_points, extract_reasoning, parse_text
 
 
-def _task_to_openai_messages(task: dict) -> List[Dict[str, Any]]:
-    messages: List[Dict[str, Any]] = []
-    current_role: Optional[str] = None
-    current_content: List[Dict[str, Any]] = []
+def _task_to_openai_messages(task: dict) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    current_role: str | None = None
+    current_content: list[dict[str, Any]] = []
     contains_non_text = False
 
     def _flush() -> None:
@@ -69,7 +68,10 @@ def _task_to_openai_messages(task: dict) -> List[Dict[str, Any]]:
             if isinstance(payload, str) and payload.startswith(("http://", "https://")):
                 image_part = {"type": "image_url", "image_url": {"url": payload}}
             else:
-                image_part = {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{payload}"}}
+                image_part = {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{payload}"},
+                }
             if current_role not in {role, None}:
                 _flush()
             current_role = role
@@ -81,14 +83,14 @@ def _task_to_openai_messages(task: dict) -> List[Dict[str, Any]]:
     return messages
 
 
-def _inject_expectation_hint(task: dict, expects: Optional[str]) -> dict:
+def _inject_expectation_hint(task: dict, expects: str | None) -> dict:
     if expects not in {"point", "box", "polygon"}:
         return task
     hint = f"<hint>{expects.upper()}</hint>"
     content = task.get("content") or []
     if any(entry.get("content") == hint for entry in content if isinstance(entry, dict)):
         return task
-    new_content: List[Dict[str, Any]] = []
+    new_content: list[dict[str, Any]] = []
     inserted = False
     for entry in content:
         if not inserted and entry.get("role") != "system":
@@ -153,27 +155,104 @@ def _prepare_transport(settings_obj, provider_cfg, task, expects, *, stream=Fals
     return task, url, headers, provider_cfg
 
 
+def _first_nonempty(*values: Any) -> str | None:
+    for value in values:
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped:
+                return stripped
+    return None
+
+
+def _extract_error_metadata(
+    data: Any,
+) -> tuple[str | None, str | None, dict[str, Any] | None]:
+    message: str | None = None
+    code: str | None = None
+    details: dict[str, Any] | None = None
+
+    if isinstance(data, dict):
+        nested_error = data.get("error")
+        if isinstance(nested_error, dict):
+            message = _first_nonempty(
+                nested_error.get("message"),
+                nested_error.get("detail"),
+                nested_error.get("error"),
+            )
+            code = nested_error.get("code") or nested_error.get("type")
+            details = nested_error or None
+        elif isinstance(nested_error, str):
+            message = _first_nonempty(nested_error)
+            details = data or None
+        else:
+            message = _first_nonempty(
+                data.get("message"),
+                data.get("detail"),
+                data.get("error") if isinstance(data.get("error"), str) else None,
+            )
+            code = data.get("code")
+            details = data or None
+    elif isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict):
+                candidate = _first_nonempty(item.get("message"), item.get("detail"))
+                if candidate:
+                    message = candidate
+                    code = item.get("code")
+                    details = item
+                    break
+            elif isinstance(item, str):
+                candidate = item.strip()
+                if candidate:
+                    message = candidate
+                    break
+    elif isinstance(data, str):
+        message = data.strip() or None
+
+    return message, code, details
+
+
 def _map_http_error(resp) -> SDKError:
     try:
         data = resp.json()
     except Exception:
-        data = {}
+        data = None
+
+    message, code, details = _extract_error_metadata(data)
+    try:
+        fallback_text = resp.text
+    except Exception:
+        fallback_text = ""
+    fallback_text = fallback_text.strip()
+    detail_payload = details if isinstance(details, dict) and details else None
+
     if resp.status_code == 400:
-        return BadRequestError(str(data) or resp.text)
+        msg = message or fallback_text or "bad request"
+        return BadRequestError(msg, code=code, details=detail_payload)
+
     if resp.status_code in (401, 403):
-        return AuthError("authentication failed")
+        auth_msg = message or fallback_text or "authentication failed"
+        return AuthError(auth_msg, code=code or "auth_error", details=detail_payload)
+
     if resp.status_code == 404:
-        return BadRequestError("not found")
+        msg = message or fallback_text or "not found"
+        return BadRequestError(msg, code=code, details=detail_payload)
+
     if resp.status_code == 429:
         retry_after = None
         try:
             retry_after = float(resp.headers.get("Retry-After", "0"))
         except Exception:
-            pass
-        return RateLimitError("rate limited", retry_after=retry_after)
+            retry_after = None
+        msg = message or fallback_text or "rate limited"
+        return RateLimitError(msg, retry_after=retry_after, details=detail_payload)
+
     if 400 <= resp.status_code < 500:
-        return BadRequestError(str(data) or resp.text)
-    return ServerError(f"server error: {resp.status_code}")
+        msg = message or fallback_text or "bad request"
+        return BadRequestError(msg, code=code, details=detail_payload)
+
+    msg = message or fallback_text or f"server error: {resp.status_code}"
+    return ServerError(msg, code=code, details=detail_payload)
 
 
 def _http_client(timeout: float):
@@ -207,7 +286,7 @@ class Client:
                 pass
         return cleaned, reasoning
 
-    def generate(self, task: dict, *, expects: Optional[str] = None, **gen_kwargs: Any) -> dict:
+    def generate(self, task: dict, *, expects: str | None = None, **gen_kwargs: Any) -> dict:
         """Execute a Task and return a result dict."""
         s = self._settings
         provider_cfg = _resolve_provider(gen_kwargs.pop("provider", None) or s.provider)
@@ -251,7 +330,14 @@ class Client:
             result["parsed"] = parse_text(content)
         return result
 
-    def stream(self, task: dict, *, expects: Optional[str] = None, parse_points: bool = False, **gen_kwargs: Any):
+    def stream(
+        self,
+        task: dict,
+        *,
+        expects: str | None = None,
+        parse_points: bool = False,
+        **gen_kwargs: Any,
+    ):
         """Yield streaming events: text.delta, points.delta, usage, error, final.
 
         Notes
@@ -319,7 +405,11 @@ class Client:
                             delta = None
                         if delta:
                             cumulative += delta
-                            yield {"type": "text.delta", "chunk": delta, "total_chars": len(cumulative)}
+                            yield {
+                                "type": "text.delta",
+                                "chunk": delta,
+                                "total_chars": len(cumulative),
+                            }
                             # Check buffer size
                             if parsing_enabled and s.max_buffer_bytes is not None:
                                 if len(cumulative.encode("utf-8")) > s.max_buffer_bytes:
@@ -330,10 +420,17 @@ class Client:
                                 # parse segments and emit newly completed tags
                                 for seg in parse_text(cumulative):
                                     if seg["kind"] in {"point", "box", "polygon"}:
-                                        span = (seg["span"]["start"], seg["span"]["end"])
+                                        span = (
+                                            seg["span"]["start"],
+                                            seg["span"]["end"],
+                                        )
                                         if span not in emitted_spans and seg["kind"] == expects:
                                             emitted_spans.add(span)
-                                            yield {"type": "points.delta", "points": [seg["value"]], "span": seg["span"]}
+                                            yield {
+                                                "type": "points.delta",
+                                                "points": [seg["value"]],
+                                                "span": seg["span"],
+                                            }
                         # else: ignore other delta types
         except httpx.TimeoutException:
             yield {"type": "error", "message": "timeout"}
@@ -351,7 +448,12 @@ class Client:
             result["parsed"] = parse_text(cleaned_text)
         issues: list[dict] = []
         if not parsing_enabled:
-            issues.append({"code": "stream_buffer_overflow", "message": "parsing disabled due to buffer limit"})
+            issues.append(
+                {
+                    "code": "stream_buffer_overflow",
+                    "message": "parsing disabled due to buffer limit",
+                }
+            )
         if usage_payload:
             result["usage"] = usage_payload
         yield {
@@ -373,7 +475,7 @@ class AsyncClient(Client):
     def __init__(self, **overrides: Any) -> None:
         super().__init__(**overrides)
 
-    async def generate(self, task: dict, *, expects: Optional[str] = None, **gen_kwargs: Any) -> dict:
+    async def generate(self, task: dict, *, expects: str | None = None, **gen_kwargs: Any) -> dict:
         s = self._settings
         provider_cfg = _resolve_provider(gen_kwargs.pop("provider", None) or s.provider)
 
@@ -417,7 +519,14 @@ class AsyncClient(Client):
             result["parsed"] = parse_text(content)
         return result
 
-    def stream(self, task: dict, *, expects: Optional[str] = None, parse_points: bool = False, **gen_kwargs: Any):
+    def stream(
+        self,
+        task: dict,
+        *,
+        expects: str | None = None,
+        parse_points: bool = False,
+        **gen_kwargs: Any,
+    ):
         s = self._settings
         provider_cfg = _resolve_provider(gen_kwargs.pop("provider", None) or s.provider)
         temperature = gen_kwargs.pop("temperature", s.temperature)
@@ -476,14 +585,21 @@ class AsyncClient(Client):
                                 delta = None
                             if delta:
                                 cumulative += delta
-                                yield {"type": "text.delta", "chunk": delta, "total_chars": len(cumulative)}
+                                yield {
+                                    "type": "text.delta",
+                                    "chunk": delta,
+                                    "total_chars": len(cumulative),
+                                }
                                 if parsing_enabled and s.max_buffer_bytes is not None:
                                     if len(cumulative.encode("utf-8")) > s.max_buffer_bytes:
                                         parsing_enabled = False
                                 if parse_points and parsing_enabled and expects in {"point", "box", "polygon"}:
                                     for seg in parse_text(cumulative):
                                         if seg["kind"] in {"point", "box", "polygon"}:
-                                            span = (seg["span"]["start"], seg["span"]["end"])
+                                            span = (
+                                                seg["span"]["start"],
+                                                seg["span"]["end"],
+                                            )
                                             if span not in emitted_spans and seg["kind"] == expects:
                                                 emitted_spans.add(span)
                                                 yield {
@@ -507,7 +623,12 @@ class AsyncClient(Client):
                 result["parsed"] = parse_text(cleaned_text)
             issues: list[dict] = []
             if not parsing_enabled:
-                issues.append({"code": "stream_buffer_overflow", "message": "parsing disabled due to buffer limit"})
+                issues.append(
+                    {
+                        "code": "stream_buffer_overflow",
+                        "message": "parsing disabled due to buffer limit",
+                    }
+                )
             yield {
                 "type": "final",
                 "result": {

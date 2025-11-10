@@ -1,6 +1,6 @@
 import asyncio
 
-from perceptron import perceive, async_perceive, inspect_task
+from perceptron import async_perceive, inspect_task, perceive
 from perceptron.dsl.nodes import image, text
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"0" * 12

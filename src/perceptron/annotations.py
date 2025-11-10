@@ -2,26 +2,35 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any
 
 from .errors import BadRequestError
+from .pointing.parser import PointParser, parse_text
 from .pointing.types import (
     BoundingBox,
     Collection,
     Polygon,
     SinglePoint,
+)
+from .pointing.types import (
     bbox as make_bbox,
+)
+from .pointing.types import (
     collection as make_collection,
+)
+from .pointing.types import (
     poly as make_polygon,
+)
+from .pointing.types import (
     pt as make_point,
 )
-from .pointing.parser import PointParser, parse_text
 
 __all__ = [
     "annotate_image",
+    "canonicalize_text_collections",
     "coerce_annotation",
     "serialize_annotations",
-    "canonicalize_text_collections",
 ]
 
 
@@ -52,7 +61,11 @@ def _coerce_point(spec: AnnotationSpec) -> SinglePoint:
         return spec
     if isinstance(spec, Mapping):
         if {"x", "y"}.issubset(spec):
-            return make_point(int(spec["x"]), int(spec["y"]), mention=spec.get("label") or spec.get("mention"))
+            return make_point(
+                int(spec["x"]),
+                int(spec["y"]),
+                mention=spec.get("label") or spec.get("mention"),
+            )
         if "point" in spec:
             x, y = spec["point"]
             return make_point(int(x), int(y), mention=spec.get("label") or spec.get("mention"))
@@ -91,12 +104,7 @@ def _build_collection(spec: AnnotationSpec) -> Collection:
     if isinstance(spec, Mapping):
         mention = spec.get("label") or spec.get("mention")
         t = spec.get("t")
-        child_specs = (
-            spec.get("points")
-            or spec.get("children")
-            or spec.get("items")
-            or spec.get("collection")
-        )
+        child_specs = spec.get("points") or spec.get("children") or spec.get("items") or spec.get("collection")
         if child_specs is None:
             raise BadRequestError("Collection spec must include points/children/items list")
         children = [coerce_annotation(child) for child in child_specs]
@@ -193,7 +201,7 @@ def serialize_annotations(
             canonical.append(_canonicalize_collection(_build_collection(coll)))
 
         def coll_key(c: Collection) -> tuple[int, tuple[int, int]]:
-            rank = 10 ** 6
+            rank = 10**6
             if mention_order and c.mention is not None and c.mention in mention_order:
                 rank = mention_order[c.mention]
             return (rank, _point_sort_key(c))

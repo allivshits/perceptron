@@ -2,7 +2,13 @@ import json
 
 import pytest
 
-from perceptron import perceive, image, text
+from perceptron import client as client_mod
+from perceptron import image, perceive, text
+
+try:
+    from PIL import Image as PILImage  # type: ignore
+except Exception:  # pragma: no cover
+    PILImage = None
 
 
 class _MockResp:
@@ -18,8 +24,7 @@ class _MockResp:
         return False
 
     def iter_lines(self, decode_unicode=True):
-        for line in self._lines:
-            yield line
+        yield from self._lines
 
 
 def _sse(obj):
@@ -38,8 +43,6 @@ def test_stream_text_and_points(monkeypatch):
         return image(img) + text("Find point")
 
     # Mock HTTP transport to stream SSE lines
-    from perceptron import client as client_mod
-
     chunks = [
         _sse({"choices": [{"delta": {"content": "Hello "}}]}),
         _sse({"choices": [{"delta": {"content": "<point> (1,2) </point>!"}}]}),
@@ -64,12 +67,7 @@ def test_stream_text_and_points(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
 
     # Provide an 8x8 image via PIL if available; else bytes
-    try:
-        from PIL import Image as PILImage  # type: ignore
-
-        img = PILImage.new("RGB", (8, 8))
-    except Exception:
-        img = b"\x89PNG\r\n\x1a\n" + b"0" * 10
+    img = PILImage.new("RGB", (8, 8)) if PILImage is not None else b"\x89PNG\r\n\x1a\n" + b"0" * 10
 
     stream_it = fn(img)
     events = list(stream_it)
@@ -86,8 +84,6 @@ def test_stream_http_error(monkeypatch):
     @perceive(stream=True)
     def fn(img):
         return image(img) + text("Hello")
-
-    from perceptron import client as client_mod
 
     class _Client:
         def __enter__(self):

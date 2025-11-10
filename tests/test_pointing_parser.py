@@ -1,4 +1,3 @@
-from perceptron.pointing.types import SinglePoint, BoundingBox, Polygon, Collection, collection
 from perceptron.pointing.parser import (
     PointParser,
     ReasoningStreamCleaner,
@@ -6,6 +5,13 @@ from perceptron.pointing.parser import (
     extract_reasoning,
     parse_text,
     strip_tags,
+)
+from perceptron.pointing.types import (
+    BoundingBox,
+    Collection,
+    Polygon,
+    SinglePoint,
+    collection,
 )
 
 
@@ -40,7 +46,7 @@ def test_strip_tags():
 def test_point_parser_escapes_and_parses_mentions():
     pt = SinglePoint(1, 2, mention='door "A" & B', t=1.5)
     tag = PointParser.serialize(pt)
-    assert 'door &quot;A&quot; &amp; B' in tag
+    assert "door &quot;A&quot; &amp; B" in tag
     segments = PointParser.parse(f"start {tag} end")
     assert len(segments) == 1
     parsed_pt = segments[0]["value"]
@@ -66,7 +72,11 @@ def test_extract_points_from_collection_propagates_attrs():
 def test_extract_points_collection_order_and_filtering():
     child_point = SinglePoint(9, 9)
     child_box = BoundingBox(SinglePoint(2, 2), SinglePoint(8, 8))
-    child_poly = Polygon([SinglePoint(0, 0), SinglePoint(1, 0), SinglePoint(1, 1)], mention="triangle", t=1.1)
+    child_poly = Polygon(
+        [SinglePoint(0, 0), SinglePoint(1, 0), SinglePoint(1, 1)],
+        mention="triangle",
+        t=1.1,
+    )
     trailing_point = SinglePoint(0, 0, mention="solo", t=5.0)
     collection = Collection(points=[child_point, child_box, child_poly], mention="bundle", t=4.2)
     text = f"pre {PointParser.serialize(collection)} mid {PointParser.serialize(trailing_point)} post"

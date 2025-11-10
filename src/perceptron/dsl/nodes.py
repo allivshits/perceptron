@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable, List
+from typing import Any
 
 
 class DSLNode:
     """Base class for DSL nodes used to compose prompts."""
 
-    def __add__(self, other: "DSLNode | Sequence") -> "Sequence":
+    def __add__(self, other: DSLNode | Sequence) -> Sequence:
         if isinstance(other, Sequence):
             return Sequence([self, *other.nodes])
         return Sequence([self, other])
@@ -63,7 +64,7 @@ class BoxTag(DSLNode):
 
 @dataclass
 class PolygonTag(DSLNode):
-    coords: List[tuple[int, int]]
+    coords: list[tuple[int, int]]
     image: Image | None = None
     mention: str | None = None
     t: float | None = None
@@ -73,9 +74,9 @@ class PolygonTag(DSLNode):
 class Sequence(DSLNode):
     """A flat sequence of nodes; supports `+` composition."""
 
-    nodes: List[DSLNode]
+    nodes: list[DSLNode]
 
-    def __add__(self, other: DSLNode | "Sequence") -> "Sequence":
+    def __add__(self, other: DSLNode | Sequence) -> Sequence:
         if isinstance(other, Sequence):
             return Sequence([*self.nodes, *other.nodes])
         return Sequence([*self.nodes, other])
@@ -114,7 +115,12 @@ def image(obj: Any) -> Image:
 
 
 def point(
-    x: int, y: int, *, image: Image | None = None, mention: str | None = None, t: float | None = None
+    x: int,
+    y: int,
+    *,
+    image: Image | None = None,
+    mention: str | None = None,
+    t: float | None = None,
 ) -> PointTag:
     """Create a point tag anchored to an image (explicit in multi-image cases)."""
     return PointTag(x, y, image=image, mention=mention, t=t)
@@ -135,7 +141,11 @@ def box(
 
 
 def polygon(
-    coords: list[tuple[int, int]], *, image: Image | None = None, mention: str | None = None, t: float | None = None
+    coords: list[tuple[int, int]],
+    *,
+    image: Image | None = None,
+    mention: str | None = None,
+    t: float | None = None,
 ) -> PolygonTag:
     """Create a polygon tag anchored to an image; requires ≥3 vertices."""
     return PolygonTag(coords, image=image, mention=mention, t=t)

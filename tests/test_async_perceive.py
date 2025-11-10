@@ -23,7 +23,14 @@ class _StubStreamAsyncClient(_StubAsyncClient):
             yield {"type": "text.delta", "chunk": "hi"}
             yield {
                 "type": "final",
-                "result": {"text": "hi", "points": None, "parsed": None, "usage": None, "errors": [], "raw": None},
+                "result": {
+                    "text": "hi",
+                    "points": None,
+                    "parsed": None,
+                    "usage": None,
+                    "errors": [],
+                    "raw": None,
+                },
             }
 
         return _gen()
@@ -40,6 +47,7 @@ def test_async_perceive_generate(monkeypatch):
     res = asyncio.run(describe(b"fake"))
     assert res.text == "hello async"
     assert res.errors == []
+
 
 def test_async_perceive_stream(monkeypatch):
     monkeypatch.setenv("FAL_KEY", "test")

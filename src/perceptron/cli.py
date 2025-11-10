@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable, Iterable
 from enum import Enum
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any
 
 import typer
 from rich.console import Console, Group
@@ -74,8 +75,8 @@ def _iter_image_files(directory: Path) -> Iterable[Path]:
             yield entry
 
 
-def _serialize_single_point(point: SinglePoint) -> Dict[str, Any]:
-    data: Dict[str, Any] = {"x": point.x, "y": point.y}
+def _serialize_single_point(point: SinglePoint) -> dict[str, Any]:
+    data: dict[str, Any] = {"x": point.x, "y": point.y}
     if point.mention is not None:
         data["mention"] = point.mention
     if point.t is not None:
@@ -87,7 +88,7 @@ def _serialize_annotation(annotation: Any) -> Any:
     if isinstance(annotation, SinglePoint):
         return {"type": "point", **_serialize_single_point(annotation)}
     if isinstance(annotation, BoundingBox):
-        data: Dict[str, Any] = {
+        data: dict[str, Any] = {
             "type": "box",
             "top_left": _serialize_single_point(annotation.top_left),
             "bottom_right": _serialize_single_point(annotation.bottom_right),
@@ -120,16 +121,18 @@ def _serialize_annotation(annotation: Any) -> Any:
     return annotation
 
 
-def _serialize_points(points: Optional[List[Any]]) -> Optional[List[Any]]:
+def _serialize_points(points: list[Any] | None) -> list[Any] | None:
     if not points:
         return None
     return [_serialize_annotation(point) for point in points]
 
 
-def _serialize_parsed(parsed: Optional[List[Dict[str, Any]]]) -> Optional[List[Dict[str, Any]]]:
+def _serialize_parsed(
+    parsed: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
     if not parsed:
         return None
-    serialized: List[Dict[str, Any]] = []
+    serialized: list[dict[str, Any]] = []
     for segment in parsed:
         if not isinstance(segment, dict):
             serialized.append({"kind": "unknown", "value": str(segment)})
@@ -145,8 +148,8 @@ def _serialize_parsed(parsed: Optional[List[Dict[str, Any]]]) -> Optional[List[D
     return serialized
 
 
-def _result_payload(result: Any, *, include_raw: bool) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {}
+def _result_payload(result: Any, *, include_raw: bool) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
     text_value = getattr(result, "text", None)
     if text_value is not None:
         payload["text"] = text_value
@@ -200,15 +203,19 @@ def _process_directory(
         )
         raise typer.Exit(code=1)
 
-    outputs: Dict[str, Any] = {}
-    errors: List[tuple[str, Dict[str, Any]]] = []
+    outputs: dict[str, Any] = {}
+    errors: list[tuple[str, dict[str, Any]]] = []
 
     for image_path in image_files:
         try:
             image_bytes = image_path.read_bytes()
         except Exception as exc:
             console.print(
-                Panel(str(exc), title=f"Error reading: {image_path.name}", border_style="red")
+                Panel(
+                    str(exc),
+                    title=f"Error reading: {image_path.name}",
+                    border_style="red",
+                )
             )
             continue
 
@@ -271,8 +278,8 @@ def _ocr_payload(result: Any) -> str:
     return getattr(result, "text", None) or ""
 
 
-def _detect_payload(result: Any) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {"text": getattr(result, "text", None) or ""}
+def _detect_payload(result: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {"text": getattr(result, "text", None) or ""}
     points = _serialize_points(getattr(result, "points", None))
     if points is not None:
         payload["points"] = points
@@ -326,9 +333,9 @@ def _build_points_table(points: Iterable[Any]) -> Table:
     return table
 
 
-def _dedupe_errors(errors: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _dedupe_errors(errors: list[dict[str, Any]]) -> list[dict[str, Any]]:
     seen: set[tuple[Any, Any]] = set()
-    unique: List[Dict[str, Any]] = []
+    unique: list[dict[str, Any]] = []
     for err in errors:
         code = err.get("code")
         message = err.get("message")
@@ -340,7 +347,7 @@ def _dedupe_errors(errors: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return unique
 
 
-def _coerce_result_dict(result: Dict[str, Any]) -> Dict[str, Any]:
+def _coerce_result_dict(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "text": result.get("text"),
         "points": result.get("points"),
@@ -351,7 +358,7 @@ def _coerce_result_dict(result: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _coerce_int(value: Any) -> Optional[int]:
+def _coerce_int(value: Any) -> int | None:
     try:
         if isinstance(value, bool):  # avoid True -> 1
             return 1 if value else 0
@@ -360,17 +367,19 @@ def _coerce_int(value: Any) -> Optional[int]:
         return None
 
 
-def _normalize_usage(usage: Any) -> Dict[str, Any]:
+def _normalize_usage(usage: Any) -> dict[str, Any]:
     if isinstance(usage, dict):
         return usage
     if hasattr(usage, "_asdict"):
         return dict(usage._asdict())  # type: ignore[attr-defined]
     if hasattr(usage, "__dict__"):
-        return dict(getattr(usage, "__dict__"))
+        return dict(usage.__dict__)
     return {}
 
 
-def _resolve_usage_tokens(usage: Optional[Dict[str, Any]]) -> tuple[Optional[int], Optional[int]]:
+def _resolve_usage_tokens(
+    usage: dict[str, Any] | None,
+) -> tuple[int | None, int | None]:
     if not usage:
         return (None, None)
     usage_map = _normalize_usage(usage)
@@ -390,7 +399,7 @@ def _resolve_usage_tokens(usage: Optional[Dict[str, Any]]) -> tuple[Optional[int
 
 
 def _stream_render(
-    events: Iterable[Dict[str, Any]],
+    events: Iterable[dict[str, Any]],
     *,
     title: str,
     output_format: OutputFormat,
@@ -399,21 +408,21 @@ def _stream_render(
 ) -> None:
     """Render streaming events inside a live-updating panel."""
 
-    text_buffer: List[str] = []
-    points_buffer: List[Any] = []
-    errors: List[Dict[str, Any]] = []
-    final_result: Dict[str, Any] | None = None
-    usage_info: Optional[Dict[str, Any]] = None
+    text_buffer: list[str] = []
+    points_buffer: list[Any] = []
+    errors: list[dict[str, Any]] = []
+    final_result: dict[str, Any] | None = None
+    usage_info: dict[str, Any] | None = None
 
     start_ts = time.perf_counter()
-    first_token_delta: Optional[float] = None
-    last_token_ts: Optional[float] = None
-    latency_samples: List[float] = []
+    first_token_delta: float | None = None
+    last_token_ts: float | None = None
+    latency_samples: list[float] = []
     delta_event_count = 0
-    end_ts: Optional[float] = None
+    end_ts: float | None = None
 
     def current_panel() -> Panel:
-        body: List[Any] = []
+        body: list[Any] = []
         text_content = "".join(text_buffer)
         text_render = Text(text_content or "<waiting for response…>")
         if not text_content:
@@ -433,7 +442,7 @@ def _stream_render(
                 body.append(summary)
         # metrics summary
         now = time.perf_counter()
-        metrics_parts: List[str] = []
+        metrics_parts: list[str] = []
         if first_token_delta is not None:
             metrics_parts.append(f"TTFT {first_token_delta * 1000:.0f} ms")
         else:
@@ -452,9 +461,7 @@ def _stream_render(
             metrics_parts.append("Avg —")
 
         tokens_in_display = (
-            str(usage_tokens_in)
-            if usage_tokens_in is not None
-            else ("—" if usage_info is None else "—")
+            str(usage_tokens_in) if usage_tokens_in is not None else ("—" if usage_info is None else "—")
         )
         if usage_tokens_out is not None:
             tokens_out_display = str(usage_tokens_out)
@@ -543,6 +550,7 @@ def _stream_render(
         if show_raw and coerced.get("raw") is not None:
             console.print(coerced["raw"])
 
+
 def _render_result(
     result: Any,
     *,
@@ -574,13 +582,13 @@ def _render_result(
 
 @app.command()
 def config(
-    provider: Optional[str] = typer.Option(None, help="Default provider identifier."),
-    api_key: Optional[str] = typer.Option(None, help="API key to export."),
-    base_url: Optional[str] = typer.Option(None, help="Optional custom base URL."),
+    provider: str | None = typer.Option(None, help="Default provider identifier."),
+    api_key: str | None = typer.Option(None, help="API key to export."),
+    base_url: str | None = typer.Option(None, help="Optional custom base URL."),
 ):
     """Show shell commands to export credentials."""
 
-    exports: List[str] = []
+    exports: list[str] = []
     if provider:
         exports.append(f"export PERCEPTRON_PROVIDER={provider}")
     if api_key:
@@ -662,7 +670,7 @@ def caption(
 @app.command()
 def ocr(
     image: str = typer.Argument(..., help="Image path or URL."),
-    prompt: Optional[str] = typer.Option(None, help="Optional instruction override."),
+    prompt: str | None = typer.Option(None, help="Optional instruction override."),
     show_raw: bool = typer.Option(False, help="Display raw response JSON."),
     output_format: OutputFormat = typer.Option(
         OutputFormat.TEXT,
@@ -699,7 +707,7 @@ def ocr(
 @app.command()
 def detect(
     image: str = typer.Argument(..., help="Image path or URL."),
-    classes: Optional[str] = typer.Option(None, help="Comma-separated class list."),
+    classes: str | None = typer.Option(None, help="Comma-separated class list."),
     show_raw: bool = typer.Option(False, help="Display raw response JSON."),
     output_format: OutputFormat = typer.Option(
         OutputFormat.TEXT,
@@ -789,7 +797,11 @@ def question(
         return
 
     res = question_image(img, prompt, expects=expects_value)
-    show_points = expects in {ExpectationType.POINT, ExpectationType.BOX, ExpectationType.POLYGON}
+    show_points = expects in {
+        ExpectationType.POINT,
+        ExpectationType.BOX,
+        ExpectationType.POLYGON,
+    }
     _render_result(
         res,
         title="Question",
@@ -797,6 +809,8 @@ def question(
         show_raw=show_raw,
         show_points_table=show_points and expects is ExpectationType.BOX,
     )
+
+
 def main():  # pragma: no cover
     app()
 

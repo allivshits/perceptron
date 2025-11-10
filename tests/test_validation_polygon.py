@@ -1,21 +1,24 @@
 import pytest
 
-from perceptron import perceive, image, polygon
+from perceptron import client as client_mod
+from perceptron import image, perceive, polygon
+from perceptron.errors import ExpectationError
+
+try:
+    from PIL import Image as PILImage  # type: ignore
+except Exception:  # pragma: no cover
+    PILImage = None
+
+
+class _Stub:
+    @staticmethod
+    def generate(task, **kwargs):
+        return {"text": "", "raw": {}}
 
 
 def test_polygon_oob_non_strict(monkeypatch):
-    from perceptron import client as client_mod
-
-    class _Stub:
-        @staticmethod
-        def generate(task, **kwargs):
-            return {"text": "", "raw": {}}
-
     monkeypatch.setattr(client_mod.Client, "generate", _Stub.generate)
-
-    try:
-        from PIL import Image as PILImage  # type: ignore
-    except Exception:
+    if PILImage is None:
         pytest.skip("PIL not available")
 
     @perceive()
@@ -29,18 +32,8 @@ def test_polygon_oob_non_strict(monkeypatch):
 
 
 def test_polygon_oob_strict(monkeypatch):
-    from perceptron import client as client_mod
-
-    class _Stub:
-        @staticmethod
-        def generate(task, **kwargs):
-            return {"text": "", "raw": {}}
-
     monkeypatch.setattr(client_mod.Client, "generate", _Stub.generate)
-
-    try:
-        from PIL import Image as PILImage  # type: ignore
-    except Exception:
+    if PILImage is None:
         pytest.skip("PIL not available")
 
     @perceive(strict=True)
@@ -48,5 +41,5 @@ def test_polygon_oob_strict(monkeypatch):
         im = image(PILImage.new("RGB", (8, 8)))
         return im + polygon([(2, 2), (6, 2), (20, 6)], image=im)
 
-    with pytest.raises(Exception):
+    with pytest.raises(ExpectationError):
         fn()

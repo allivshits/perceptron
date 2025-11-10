@@ -1,9 +1,8 @@
-from perceptron import perceive, image, text, box, agent
+from perceptron import agent, box, image, perceive, text
+from perceptron import client as client_mod
 from perceptron import config as cfg
 from perceptron.pointing.parser import PointParser
-from perceptron.pointing.types import bbox, SinglePoint
-from perceptron import client as client_mod
-
+from perceptron.pointing.types import SinglePoint, bbox
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"0" * 16
 
@@ -24,7 +23,9 @@ def _icl_prompt():
 
 
 def test_task_roles_and_message_conversion():
-    res = _icl_prompt()
+    # Run in compile-only mode by clearing credentials
+    with cfg(api_key=None, provider=None):
+        res = _icl_prompt()
     task = res.raw
     # Verify roles in compiled task
     roles = [item.get("role") for item in task.get("content", []) if item.get("type") == "text"]
@@ -123,7 +124,8 @@ def test_image_url_passthrough(monkeypatch):
         return image("https://example.com/sample.png")
 
     # Compile-only (no provider configured)
-    res = fn()
+    with cfg(api_key=None, provider=None):
+        res = fn()
     assert res.raw and isinstance(res.raw, dict)
     content = res.raw.get("content", [])
     assert content and content[0].get("content") == "https://example.com/sample.png"

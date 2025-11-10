@@ -186,7 +186,7 @@ class Event:
 
         return hash(tuple(hash_values))
 
-    def __eq__(self, other) -> bool:
+    def __eq__(self, other) -> bool:  # noqa: PLR0911
         """
         Compares two Event objects for strict equality,
         allowing for float tolerances in torch.Tensors (via torch.allclose).
@@ -203,19 +203,17 @@ class Event:
                 if isinstance(self_value, torch.Tensor) and isinstance(other_value, torch.Tensor):
                     if not torch.allclose(self_value, other_value):
                         return False
-                else:
-                    if self_value != other_value:
-                        return False
+                elif self_value != other_value:
+                    return False
             elif fld.name == "role":
                 # Special handling for role: both must be None or both must be set and equal
                 if (self_value is None) != (other_value is None):
                     return False
                 if self_value is not None and self_value != other_value:
                     return False
-            else:
-                # Standard equality for all other fields
-                if self_value != other_value:
-                    return False
+            # Standard equality for all other fields
+            elif self_value != other_value:
+                return False
 
         return True
 
@@ -293,7 +291,7 @@ class Stream:
 
     @record_function("Stream.compact")
     def compact(self) -> torch.Tensor:
-        assert all([(isinstance(ev.data, torch.Tensor) and ev.is_measured) for ev in self.events]), (
+        assert all(isinstance(ev.data, torch.Tensor) and ev.is_measured for ev in self.events), (
             "Stream.compact only works for streams with events that have measured tensor data"
         )
         return torch.cat([ev.data for ev in self.events]).contiguous()
@@ -379,7 +377,9 @@ class TensorStream:
         if not self.streams:
             return create_stream([], priority=[], schedule=False)
         return create_stream(
-            [event for stream in self.streams for event in stream], priority=self.streams[0].priority, schedule=False
+            [event for stream in self.streams for event in stream],
+            priority=self.streams[0].priority,
+            schedule=False,
         )
 
     @property
@@ -388,8 +388,8 @@ class TensorStream:
 
     @property
     def shape(self):
-        seq_lens = [sum([ev.num_tokens() for ev in stream]) for stream in self.streams]
-        assert all([sl == seq_lens[0] for sl in seq_lens]), (
+        seq_lens = [sum(ev.num_tokens() for ev in stream) for stream in self.streams]
+        assert all(sl == seq_lens[0] for sl in seq_lens), (
             f"each stream must have same token count to have a shape: {seq_lens}"
         )
         return (len(seq_lens), seq_lens[0])
@@ -423,10 +423,7 @@ class TensorStream:
                 # ------------------------------------------------------------------
                 # Decide the dtype for *this* event.
                 # ------------------------------------------------------------------
-                if ev.type in list(TextType):
-                    tgt_dtype = torch.long
-                else:
-                    tgt_dtype = dtype or ev.data.dtype
+                tgt_dtype = torch.long if ev.type in list(TextType) else dtype or ev.data.dtype
 
                 # ------------------------------------------------------------------
                 # Perform the device / dtype move.
@@ -476,13 +473,13 @@ class TensorStream:
             for ev in stream:
                 if ev.data.device.type == "cpu":
                     # `pin_memory()` clones only when needed
-                    pinned = ev.data.pin_memory()  # noqa: F841
+                    pinned = ev.data.pin_memory()
                     # NB: pin_memory() preserves dtype/shape/grad/etc.
                     if not non_blocking:
                         # ensure the pinning work is done now
                         torch.cuda.current_stream().synchronize()  # safe on CPU too
                     ev.data = pinned
-        # `_device` **stays** the same (still CPU) – no change needed
+        # `_device` **stays** the same (still CPU) - no change needed
         return self
 
     def __hash__(self) -> int:
@@ -562,7 +559,7 @@ def merge_streams(streams: Iterable[Stream]) -> Stream:
     """
     chosen_priority = max([stream.priority for stream in streams], key=len)
     assert all(
-        [str(stream.priority) in str([p for p in chosen_priority if p in stream.priority]) for stream in streams]
+        str(stream.priority) in str([p for p in chosen_priority if p in stream.priority]) for stream in streams
     ), "One or more streams has a priority order that doesn't match the merged stream"
     merged_event_list = [ev for stream in streams for ev in stream.events]
     merged_stream = create_stream(merged_event_list, chosen_priority)  # non-root stream creation
@@ -667,13 +664,13 @@ def schedule_events(stream: Stream, priority: list[Category]) -> list[int]:
 
     # Build dependency graph
     graph = defaultdict(set)
-    indegree = {i: 0 for i in range(num_events)}
+    indegree = dict.fromkeys(range(num_events), 0)
 
     for i in range(num_events):
-        idx_i, start_i, end_i, category_i = sorted_events[i]
+        _idx_i, start_i, end_i, category_i = sorted_events[i]
         prio_i = priority_index[category_i]
         for j in range(i + 1, num_events):
-            idx_j, start_j, end_j, category_j = sorted_events[j]
+            _idx_j, start_j, end_j, category_j = sorted_events[j]
             if start_j >= end_i:
                 break
             if end_i > start_j and end_j > start_i:

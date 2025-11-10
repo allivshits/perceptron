@@ -43,3 +43,46 @@ include = ["perceptron*"]
 markers = [
     "integration: tests that call live Perceptron providers (require PERCEPTRON_API_KEY)",
 ]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = [
+    "papers",
+    "huggingface",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "W",
+    "I",
+    "UP",
+    "B",
+    "C4",
+    "T20",
+    "SIM",
+    "PL",
+    "RUF",
+]
+ignore = [
+    # Rely on the formatter for wrapping, so relax the built-in line-length rule
+    "E501",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**.py" = ["PLR2004"]
+"src/perceptron/annotations.py" = ["PLR2004", "PLR0911", "PLR0912"]
+"src/perceptron/cli.py" = ["PLR0912", "PLR0913", "PLR0915", "PLR2004", "B008", "RUF034"]
+"src/perceptron/client.py" = ["PLR2004", "PLR0912", "PLR0915", "SIM117", "SIM102"]
+"src/perceptron/config.py" = ["PLW0602", "PLW0603"]
+"src/perceptron/dsl/nodes.py" = ["PLR0913"]
+"src/perceptron/dsl/perceive.py" = ["PLR0912", "PLR0915", "PLR0913"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "lf"
+docstring-code-format = true
