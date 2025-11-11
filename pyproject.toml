@@ -27,6 +27,8 @@ dev = [
     "pre-commit>=3.5",
     "ruff==0.13.0",
     "ty==0.0.1-alpha.20",
+    "nbclient>=0.10",
+    "nbformat>=5.10",
 ]
 torch = [
     "torch>=2.0",
@@ -50,6 +52,7 @@ line-length = 120
 extend-exclude = [
     "papers",
     "huggingface",
+    "cookbook/**/*.ipynb",
 ]
 
 [tool.ruff.lint]
