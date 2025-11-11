@@ -302,6 +302,137 @@ class PerceiveResult:
         return scale_points_to_pixels(self.points, width=width, height=height, clamp=clamp)
 
 
+def _prepare_client_kwargs(
+    *,
+    provider_override: str | None,
+    model_override: str | None,
+    expects: str | None,
+    allow_multiple: bool,
+    max_outputs: int | None,
+    temperature: float,
+    max_tokens: int,
+    top_p: float,
+    top_k: int | None,
+):
+    env = settings()
+    resolved_provider = provider_override or env.provider
+    provider_name = resolved_provider or "fal"
+    client_kwargs = {
+        "expects": expects,
+        "provider": provider_name,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "top_p": top_p,
+        "top_k": top_k,
+        "allow_multiple": allow_multiple,
+        "max_outputs": max_outputs,
+    }
+    if model_override is not None:
+        client_kwargs["model"] = model_override
+    return env, resolved_provider, provider_name, client_kwargs
+
+
+def _maybe_compile_only_result(
+    *,
+    stream: bool,
+    resolved_provider: str | None,
+    provider_name: str,
+    env,
+    issues: list[dict],
+    task: dict,
+):
+    if stream:
+        return None
+    if resolved_provider is None or not _has_credentials(provider_name, env):
+        errors_with_hint = [*issues, _credentials_issue(provider_name)]
+        return PerceiveResult(
+            text=None,
+            points=None,
+            parsed=None,
+            usage=None,
+            errors=errors_with_hint,
+            raw=task,
+        )
+    return None
+
+
+def _perceive_result_from_response(resp: dict, issues: list[dict]) -> PerceiveResult:
+    text = resp.get("text")
+    points = resp.get("points")
+    parsed = resp.get("parsed")
+    return PerceiveResult(
+        text=text,
+        points=points,
+        parsed=parsed,
+        usage=None,
+        errors=issues,
+        raw=resp.get("raw"),
+    )
+
+
+def _compile_nodes_sync(
+    fn: Callable[..., Any], *, expects: str | None, strict: bool, args: tuple[Any, ...], kwargs: dict[str, Any]
+):
+    nodes = fn(*args, **kwargs)
+    return _compile(nodes, expects=expects, strict=strict)
+
+
+async def _compile_nodes_async(
+    fn: Callable[..., Any],
+    *,
+    expects: str | None,
+    strict: bool,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+):
+    nodes = fn(*args, **kwargs)
+    if inspect.isawaitable(nodes):
+        nodes = await nodes
+    return _compile(nodes, expects=expects, strict=strict)
+
+
+def _prepare_execution_context(
+    *,
+    task: dict,
+    issues: list[dict],
+    stream: bool,
+    provider_override: str | None,
+    model_override: str | None,
+    expects: str | None,
+    allow_multiple: bool,
+    max_outputs: int | None,
+    temperature: float,
+    max_tokens: int,
+    top_p: float,
+    top_k: int | None,
+):
+    env, resolved_provider, provider_name, client_kwargs = _prepare_client_kwargs(
+        provider_override=provider_override,
+        model_override=model_override,
+        expects=expects,
+        allow_multiple=allow_multiple,
+        max_outputs=max_outputs,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        top_p=top_p,
+        top_k=top_k,
+    )
+
+    compile_only = _maybe_compile_only_result(
+        stream=stream,
+        resolved_provider=resolved_provider,
+        provider_name=provider_name,
+        env=env,
+        issues=issues,
+        task=task,
+    )
+    return compile_only, client_kwargs
+
+
+def _expects_structured(expects: str | None) -> bool:
+    return expects in {"point", "box", "polygon"}
+
+
 def perceive(
     *,
     visual_reasoning: str | None = None,
@@ -323,100 +454,49 @@ def perceive(
     (no provider configured or the selected provider lacks credentials).
     """
 
+    parse_points = _expects_structured(expects)
+
     def wrapper(fn: Callable[..., Any]):
+        def _inspect(*args: Any, **kwargs: Any):
+            return _compile_nodes_sync(fn, expects=expects, strict=strict, args=args, kwargs=kwargs)
+
         def _call(*args: Any, **kwargs: Any):
-            nodes = fn(*args, **kwargs)
-            task, issues = _compile(nodes, expects=expects, strict=strict)
+            task, issues = _inspect(*args, **kwargs)
+            compile_only, client_kwargs = _prepare_execution_context(
+                task=task,
+                issues=issues,
+                stream=stream,
+                provider_override=provider,
+                model_override=model,
+                expects=expects,
+                allow_multiple=allow_multiple,
+                max_outputs=max_outputs,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p,
+                top_k=top_k,
+            )
+            if compile_only is not None:
+                return compile_only
+
             client = Client()
-            # Resolve provider but avoid forcing remote execution in tests/local
-            env = settings()
-            resolved_provider = provider or env.provider
-            provider_name = resolved_provider or "fal"
-
-            # Compile-only fallback: if no explicit provider and no API key configured,
-            # return the compiled task without executing a request.
-            if not stream:
-                if resolved_provider is None:
-                    # No configured provider → compile-only with credential hint
-                    errors_with_hint = [*issues, _credentials_issue(provider_name)]
-                    return PerceiveResult(
-                        text=None,
-                        points=None,
-                        parsed=None,
-                        usage=None,
-                        errors=errors_with_hint,
-                        raw=task,
-                    )
-                if not _has_credentials(provider_name, env):
-                    errors_with_hint = [*issues, _credentials_issue(provider_name)]
-                    return PerceiveResult(
-                        text=None,
-                        points=None,
-                        parsed=None,
-                        usage=None,
-                        errors=errors_with_hint,
-                        raw=task,
-                    )
-
             if stream:
-                # Delegate to client.stream; pass through events
                 return client.stream(
                     task,
-                    expects=expects,
-                    parse_points=expects in {"point", "box", "polygon"},
-                    provider=provider_name,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    top_p=top_p,
-                    top_k=top_k,
-                    allow_multiple=allow_multiple,
-                    max_outputs=max_outputs,
-                )
-            else:
-                try:
-                    resp = client.generate(
-                        task,
-                        expects=expects,
-                        provider=provider_name,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        top_p=top_p,
-                        top_k=top_k,
-                        allow_multiple=allow_multiple,
-                        max_outputs=max_outputs,
-                    )
-                except TypeError:
-                    # Support tests that monkeypatch Client.generate as a @staticmethod
-                    gen = getattr(type(client), "generate", None)
-                    if callable(gen):
-                        resp = gen(
-                            task,
-                            expects=expects,
-                            provider=provider_name,
-                            temperature=temperature,
-                            max_tokens=max_tokens,
-                            top_p=top_p,
-                            top_k=top_k,
-                            allow_multiple=allow_multiple,
-                            max_outputs=max_outputs,
-                        )
-                    else:
-                        raise
-                text = resp.get("text")
-                points = resp.get("points")
-                parsed = resp.get("parsed")
-                return PerceiveResult(
-                    text=text,
-                    points=points,
-                    parsed=parsed,
-                    usage=None,
-                    errors=issues,
-                    raw=resp.get("raw"),
+                    parse_points=parse_points,
+                    **client_kwargs,
                 )
 
-        def _inspect(*args: Any, **kwargs: Any):
-            nodes_local = fn(*args, **kwargs)
-            return _compile(nodes_local, expects=expects, strict=strict)
+            try:
+                resp = client.generate(task, **client_kwargs)
+            except TypeError:
+                # Support tests that monkeypatch Client.generate as a @staticmethod
+                gen = getattr(type(client), "generate", None)
+                if callable(gen):
+                    resp = gen(task, **client_kwargs)
+                else:
+                    raise
+            return _perceive_result_from_response(resp, issues)
 
         _call.__perceptron_inspector__ = _inspect  # type: ignore[attr-defined]
 
@@ -442,99 +522,69 @@ def async_perceive(
 ):
     """Async counterpart to ``perceive`` using :class:`AsyncClient`."""
 
+    parse_points = _expects_structured(expects)
+
     def wrapper(fn: Callable[..., Any]):
-        async def _prepare_nodes(*args: Any, **kwargs: Any):
-            nodes = fn(*args, **kwargs)
-            if inspect.isawaitable(nodes):
-                nodes = await nodes
-            return _compile(nodes, expects=expects, strict=strict)
+        async def _inspect_async(*args: Any, **kwargs: Any):
+            return await _compile_nodes_async(fn, expects=expects, strict=strict, args=args, kwargs=kwargs)
 
         if stream:
 
             def _call(*args: Any, **kwargs: Any):
                 async def _generator():
-                    task, _issues = await _prepare_nodes(*args, **kwargs)
-                    client = AsyncClient()
-                    env = settings()
-                    resolved_provider = provider or env.provider
-                    provider_name = resolved_provider or "fal"
-
-                    async for event in client.stream(
-                        task,
+                    task, issues = await _inspect_async(*args, **kwargs)
+                    compile_only, client_kwargs = _prepare_execution_context(
+                        task=task,
+                        issues=issues,
+                        stream=True,
+                        provider_override=provider,
+                        model_override=model,
                         expects=expects,
-                        parse_points=expects in {"point", "box", "polygon"},
-                        provider=provider_name,
+                        allow_multiple=allow_multiple,
+                        max_outputs=max_outputs,
                         temperature=temperature,
                         max_tokens=max_tokens,
                         top_p=top_p,
                         top_k=top_k,
-                        allow_multiple=allow_multiple,
-                        max_outputs=max_outputs,
+                    )
+                    if compile_only is not None:
+                        return
+                    client = AsyncClient()
+                    async for event in client.stream(
+                        task,
+                        parse_points=parse_points,
+                        **client_kwargs,
                     ):
                         yield event
 
                 return _generator()
-
-            async def _inspect_async(*args: Any, **kwargs: Any):
-                return await _prepare_nodes(*args, **kwargs)
 
             _call.__perceptron_inspector__ = _inspect_async  # type: ignore[attr-defined]
 
             return _call
 
         async def _call(*args: Any, **kwargs: Any):
-            task, issues = await _prepare_nodes(*args, **kwargs)
-            client = AsyncClient()
-            env = settings()
-            resolved_provider = provider or env.provider
-            provider_name = resolved_provider or "fal"
-
-            if resolved_provider is None:
-                errors_with_hint = [*issues, _credentials_issue(provider_name)]
-                return PerceiveResult(
-                    text=None,
-                    points=None,
-                    parsed=None,
-                    usage=None,
-                    errors=errors_with_hint,
-                    raw=task,
-                )
-            if not _has_credentials(provider_name, env):
-                errors_with_hint = [*issues, _credentials_issue(provider_name)]
-                return PerceiveResult(
-                    text=None,
-                    points=None,
-                    parsed=None,
-                    usage=None,
-                    errors=errors_with_hint,
-                    raw=task,
-                )
-
-            resp = await client.generate(
-                task,
+            task, issues = await _inspect_async(*args, **kwargs)
+            compile_only, client_kwargs = _prepare_execution_context(
+                task=task,
+                issues=issues,
+                stream=False,
+                provider_override=provider,
+                model_override=model,
                 expects=expects,
-                provider=provider_name,
+                allow_multiple=allow_multiple,
+                max_outputs=max_outputs,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 top_p=top_p,
                 top_k=top_k,
-                allow_multiple=allow_multiple,
-                max_outputs=max_outputs,
             )
-            text = resp.get("text")
-            points = resp.get("points")
-            parsed = resp.get("parsed")
-            return PerceiveResult(
-                text=text,
-                points=points,
-                parsed=parsed,
-                usage=None,
-                errors=issues,
-                raw=resp.get("raw"),
-            )
+            if compile_only is not None:
+                return compile_only
 
-        async def _inspect_async(*args: Any, **kwargs: Any):
-            return await _prepare_nodes(*args, **kwargs)
+            client = AsyncClient()
+            resp = await client.generate(task, **client_kwargs)
+            return _perceive_result_from_response(resp, issues)
 
         _call.__perceptron_inspector__ = _inspect_async  # type: ignore[attr-defined]
 
