@@ -60,33 +60,68 @@ class _StreamProcessor:
         self._emitted_spans: set[tuple[int, int]] = set()
         self._parsing_enabled = True
         self._usage_payload: dict[str, Any] | None = None
+        self._reasoning_started = False
+        self._answering_started = False
 
     def handle_payload(self, obj: Any) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
         if not isinstance(obj, dict):
             return events
+
+        # Capture usage info
         usage_field = obj.get("usage")
         if isinstance(usage_field, dict) and self._usage_payload is None:
             self._usage_payload = usage_field
+
+        # Extract delta
         try:
-            delta = obj["choices"][0]["delta"].get("content")
-        except Exception:
-            delta = None
-        if not delta:
+            delta = obj["choices"][0]["delta"]
+        except (KeyError, IndexError, TypeError):
             return events
-        self._cumulative += delta
-        events.append(
-            {
+
+        # Process reasoning content (wrap in <think> tags)
+        reasoning = delta.get("reasoning_content")
+        if reasoning:
+            if not self._reasoning_started:
+                self._reasoning_started = True
+                reasoning = f"<think>{reasoning}"
+            self._cumulative += reasoning
+            events.append({
                 "type": "text.delta",
-                "chunk": delta,
+                "chunk": reasoning,
                 "total_chars": len(self._cumulative),
-            }
-        )
+            })
+
+        # Process answer content
+        content = delta.get("content")
+        if content:
+            # Close </think> tag before first content chunk
+            if self._reasoning_started and not self._answering_started:
+                close_tag = "</think>"
+                self._cumulative += close_tag
+                events.append({
+                    "type": "text.delta",
+                    "chunk": close_tag,
+                    "total_chars": len(self._cumulative),
+                })
+                self._answering_started = True
+
+            self._cumulative += content
+            events.append({
+                "type": "text.delta",
+                "chunk": content,
+                "total_chars": len(self._cumulative),
+            })
+
+        # Check buffer limits
         if self._parsing_enabled and self._max_buffer_bytes is not None:
             if len(self._cumulative.encode("utf-8")) > self._max_buffer_bytes:
                 self._parsing_enabled = False
-        if self._parse_points and self._parsing_enabled and isinstance(self._cumulative, str):
+
+        # Parse points
+        if self._parse_points and self._parsing_enabled:
             events.extend(self._point_events())
+
         return events
 
     def finalize(self) -> dict[str, Any]:
@@ -507,8 +542,22 @@ class _ClientCore:
         return _PreparedInvocation(url=url, headers=headers, body=body, expects=expects, provider_cfg=resolved_cfg)
 
     def _build_result(self, data: dict[str, Any], expects: str | None) -> dict[str, Any]:
-        content = data.get("choices", [{}])[0].get("message", {}).get("content")
-        content, reasoning = self._clean_text_with_reasoning(content, data)
+        message = data.get("choices", [{}])[0].get("message", {})
+
+        # Get both reasoning and content separately
+        reasoning_content = message.get("reasoning_content")
+        answer_content = message.get("content")
+
+        # Build full content with <think> tags if reasoning exists
+        if reasoning_content and answer_content:
+            full_content = f"<think>{reasoning_content}</think>{answer_content}"
+        elif reasoning_content:
+            full_content = f"<think>{reasoning_content}</think>"
+        else:
+            full_content = answer_content
+
+        # Clean and extract reasoning
+        content, reasoning = self._clean_text_with_reasoning(full_content, data)
         result: dict[str, Any] = {"text": content, "raw": data}
         if reasoning:
             result["reasoning"] = reasoning
