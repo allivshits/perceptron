@@ -1,131 +1,221 @@
-# Perceptron SDK
-[![Tests](https://github.com/perceptron-ai-inc/perceptron/actions/workflows/tests.yml/badge.svg)](https://github.com/perceptron-ai-inc/perceptron/actions/workflows/tests.yml) [![codecov](https://codecov.io/github/perceptron-ai-inc/perceptron/graph/badge.svg?token=HW6JASKQJR)](https://codecov.io/github/perceptron-ai-inc/perceptron)
+<p align="center">
+  <a href="https://www.perceptron.inc/" target="_blank" rel="noopener">
+    <img src="./assets/banner-light.svg" alt="Perceptron" width="680" />
+  </a>
+</p>
 
-Python SDK and CLI for perceptive-language models. The SDK is provider-agnostic and lets you compose visual + language tasks, run them locally for inspection, or execute them via a configured provider. Choose a provider and optional model per call; keep your application code stable across model updates.
+<div align="center">
+  <h3>The platform for physical AI</h3>
+</div>
+
+<p align="center">
+  <a href="https://github.com/perceptron-ai-inc/perceptron/actions/workflows/tests.yml"><img src="https://github.com/perceptron-ai-inc/perceptron/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
+  <a href="https://codecov.io/github/perceptron-ai-inc/perceptron"><img src="https://codecov.io/github/perceptron-ai-inc/perceptron/graph/badge.svg?token=HW6JASKQJR" alt="codecov"></a>
+</p>
+
+**Perceptron is the Python SDK for building with perceptive-language models like Isaac 0.1.** Designed for physical AI applications—robotics, manufacturing, logistics, and security—it provides a unified interface for grounded perception: detection, localization, OCR, and visual Q&A with structured outputs ready for robotics, analytics, and edge deployment. Route tasks to specialized models, swap providers per call, and compose complex multimodal flows with a typed DSL. Efficient enough for edge deployment, flexible enough for any real-world task.
+
+<p align="center">
+  <a href="https://www.perceptron.inc/" target="_blank"><strong>Website</strong></a> ·
+  <a href="https://docs.perceptron.inc" target="_blank"><strong>Docs</strong></a> ·
+  <a href="https://discord.gg/fgBeaACQzE" target="_blank"><strong>Community</strong></a>
+</p>
+
+---
+
+## Why Perceptron?
+
+**Grounded, spatial intelligence**
+Get precise localization and grounded answers with conversational pointing—every claim is visually cited. Ask "what's broken in this machine?" and get highlighted regions with robust spatial reasoning that handles occlusions, relationships, and object interactions.
+
+**In-context learning for perception**
+Show a few annotated examples (defects, safety conditions, custom categories) in your prompt and the model adapts—no YOLO-style fine-tuning or custom detector stacks required. Learn novel tasks from a handful of examples.
+
+**Efficient frontier for real-world deployment**
+Isaac 0.1 matches models 50x its size while delivering edge-ready latencies and drastically lower serving costs. Perception workloads are continuous and latency-sensitive—Perceptron is built for the efficient frontier where capability meets real-world constraints.
+
+**Prompt for anything, control the output type**
+Ask for whatever you need in natural language—"find safety violations", "locate damaged components", "identify obstacles"—and specify the output format: bounding boxes, points, polygons, or text. The flexibility of language models with the structure your application needs.
 
 ---
 
 ## Installation
-- Prerequisites: Python 3.10+, `pip` 23+ (or [`uv`](https://github.com/astral-sh/uv))
+
+- Prerequisites: Python 3.10+ and `pip` 23+ (or [`uv`](https://github.com/astral-sh/uv))
+- Works with standard `pip` if you don't use `uv`.
 
 ```bash
 pip install perceptron
 
 # Optional extras
-pip install "perceptron[torch]"   # TensorStream helpers (requires PyTorch)
-pip install "perceptron[dev]"     # Dev tools (ruff, pytest, pre-commit)
+pip install "perceptron[torch]"   # Tensor utilities (requires PyTorch)
+pip install "perceptron[dev]"     # Ruff, pytest, pre-commit
 ```
 
 Using `uv`:
 ```bash
 uv pip install perceptron
+
+# Optional: PyTorch helpers for tensor utilities
 uv pip install "perceptron[torch]"
+
+# Optional: Dev tools (ruff, pytest, pre-commit)
 uv pip install "perceptron[dev]"
 ```
 
 The CLI entry point `perceptron` is available after install.
 
----
+## Quick Start
+
+```python
+from perceptron import detect, caption
+
+# Detect objects with structured bounding boxes
+result = detect(
+    "warehouse.jpg",
+    classes=["forklift", "person", "pallet"],
+    model="perceptron"
+)
+
+for box in result.points or []:
+    print(f"{box.mention}: ({box.top_left.x}, {box.top_left.y})")
+
+# Generate image captions
+desc = caption("scene.png", style="detailed")
+print(desc.text)
+```
+
+No credentials? The SDK returns compile-only payloads when API keys are missing, letting you inspect requests before sending them.
 
 ## Configuration
-Set credentials and defaults via environment, programmatically, or the CLI. The SDK ships with a `fal` provider; you can add others by extending `perceptron.client._PROVIDER_CONFIG`.
 
-- `PERCEPTRON_PROVIDER`: provider identifier (default `fal`)
-- `PERCEPTRON_API_KEY`: API key for the selected provider
-- `PERCEPTRON_BASE_URL`: override provider base URL when needed
-- `FAL_KEY`: alternative env var used when `provider=fal`
+Set credentials once via environment, code, or the CLI. The SDK ships with the Perceptron backend enabled by default, and you can add or swap providers (e.g., `fal`) by extending `perceptron.client._PROVIDER_CONFIG`.
 
-Programmatic configuration:
+**Environment variables (pick what you need):**
+- `PERCEPTRON_PROVIDER` – provider identifier (`perceptron` by default)
+- `PERCEPTRON_API_KEY` – API key for the selected provider
+- Provider-specific keys (e.g., `FAL_KEY`) when targeting alternates
+
+```bash
+export PERCEPTRON_PROVIDER=perceptron
+export PERCEPTRON_API_KEY=sk_live_...
+```
+
+**Programmatic:**
 ```python
 from perceptron import configure, config
 
-configure(provider="fal", api_key="sk_live_...", base_url="https://api.example/v1")
+configure(provider="perceptron", api_key="sk_live_...")
 
 with config(max_tokens=512):
-    ...  # temporary overrides inside the context
+    ...  # temporary overrides while inside the context
 ```
 
-CLI helper:
+**CLI:**
 ```bash
-perceptron config --provider fal --api-key sk_live_...
+perceptron config --provider perceptron --api-key sk_live_...
 ```
 
-No credentials? Helpers return compile-only payloads so you can inspect tasks without sending requests.
+No credentials? Helpers return compile-only payloads so you can inspect tasks before sending requests.
 
 ---
 
-## Python Quickstart
-```python
-from perceptron import caption, detect
+## Core Features
 
-# Caption an image (provider default model)
-result = caption("/path/to/image.png", style="concise")
+### Detection with structured outputs
+Get normalized bounding boxes (0-1000 coordinate space) ready for downstream tasks:
+
+```python
+from perceptron import detect
+
+result = detect("factory_floor.jpg", classes=["defect", "warning"])
+
+for box in result.points or []:
+    print(f"{box.mention}: {box.top_left} → {box.bottom_right}")
+```
+
+### Image captioning
+```python
+from perceptron import caption
+
+result = caption("product.png", style="concise")
+print(result.text)  # "A blue widget on a white background"
+```
+
+### OCR with custom prompts
+```python
+from perceptron import ocr
+
+result = ocr("schematic.png", prompt="Extract all component labels and their values")
 print(result.text)
-
-# Stream grounded detections; optionally select a specific model
-for event in detect("local.png", classes=["person", "forklift"], model="perceptron", stream=True):
-    if event["type"] == "text.delta":
-        print("chunk", event["chunk"])
-    elif event["type"] == "points.delta":
-        print("bbox", event["points"])
-    elif event["type"] == "final":
-        print("final", event["result"]["points"])
 ```
 
-### Few-shot detection from COCO
+### Streaming responses
+Stream incremental text and coordinate deltas for real-time applications:
+
 ```python
-from perceptron import detect_from_coco
+from perceptron import detect
 
-runs = detect_from_coco(
-    "/datasets/demo",
-    split="train",
-    shots=4,                 # build balanced in-context examples automatically
-    classes=["defect", "ok"],
-)
-
-for sample in runs:
-    print(sample.image_path.name)
-    for box in sample.result.points or []:
-        print(" -", box.mention, box)
+for event in detect("frame.png", classes=["person"], stream=True):
+    if event["type"] == "text.delta":
+        print(event["chunk"], end="", flush=True)
+    elif event["type"] == "points.delta":
+        print(f"Detection: {event['points']}")
+    elif event["type"] == "final":
+        result = event["result"]
 ```
+
+### High-level helper surface
+- `caption(image, *, style="concise", stream=False, **kwargs)` – describe or summarize images.
+- `detect(image, *, classes=None, examples=None, stream=False, **kwargs)` – grounded detection with points/boxes/polygons.
+- `ocr(image, *, prompt=None, stream=False, **kwargs)` – text extraction with optional instructions.
+- `detect_from_coco(dataset_dir, *, split=None, classes=None, shots=0, limit=None, **kwargs)` – auto-build few-shot prompts from datasets.
+- `perceive(nodes, *, expects="text", stream=False, **kwargs)` / `@perceive` – compose arbitrary multimodal workflows with the DSL.
 
 ---
 
 ## CLI Usage
-The CLI mirrors the high-level helpers and supports directory batching (JSON summaries written alongside input folders).
+
+The CLI provides quick access to core features for batch processing and scripting:
 
 ```bash
-# Generate captions
+# Caption single image or directory
 perceptron caption image.jpg
 perceptron caption ./images --style detailed
 
-# OCR with a custom prompt
-perceptron ocr schematic.png --prompt "Extract component labels"
+# OCR with custom prompt
+perceptron ocr document.png --prompt "Extract table data"
 
-# Batched detection (writes detections.json)
-perceptron detect ./frames --classes defect,warning
+# Detect objects (writes detections.json)
+perceptron detect ./frames --classes forklift,person,pallet
 
-# Grounded question answering
-perceptron question image.jpg "What stands out?" --expects box --format json
+# Visual Q&A with grounding
+perceptron question scene.jpg "Where is the safety equipment?" --expects box
 ```
 
-Directory mode disables streaming and logs raw responses, plus per-file validation issues.
+Directory mode disables streaming, writes JSON summaries (`detections.json`) alongside the input folder, and logs per-file validation issues for easier auditing.
 
----
+## Advanced Usage
 
-## High-Level APIs
-- `caption(image, *, style="concise", stream=False, **kwargs)`
-- `ocr(image, *, prompt=None, stream=False, **kwargs)`
-- `detect(image, *, classes=None, examples=None, stream=False, **kwargs)`
-- `detect_from_coco(dataset_dir, *, split=None, classes=None, shots=0, limit=None, **kwargs)`
+### Few-shot detection with COCO datasets
+Automatically build balanced in-context examples from annotated datasets:
 
-Notes
-- Pass `model="..."`, `provider="..."`, `max_tokens=...`, etc., through `**kwargs` on any helper.
-- `detect_from_coco` discovers annotations, constructs balanced examples when `shots > 0`, and returns `CocoDetectResult` objects.
-- For advanced workflows, build tasks with the typed DSL (`text`, `system`, `image`, `point`, `box`, `polygon`, `collection`) and decorate with `@perceive` / `@async_perceive`.
+```python
+from perceptron import detect_from_coco
 
-### Scaling normalized coordinates
-Structured outputs (points/boxes/polygons) use a normalized 0–1000 grid. Convert them to pixel coordinates once you know the rendered image size:
+results = detect_from_coco(
+    "/datasets/custom",
+    split="train",
+    shots=4,  # balanced examples per class
+    classes=["defect", "ok"]
+)
+
+for sample in results:
+    print(f"{sample.image_path.name}: {len(sample.result.points or [])} detections")
+```
+
+### Coordinate scaling
+Outputs use normalized 0-1000 coordinates. Convert to pixels for rendering or metrics:
 
 ```python
 from PIL import Image
@@ -134,83 +224,93 @@ from perceptron import detect, scale_points_to_pixels
 result = detect("frame.png", classes=["forklift"])
 width, height = Image.open("frame.png").size
 
-# Option 1: use the helper function
-pixel_space = scale_points_to_pixels(result.points, width=width, height=height)
+# Option 1: helper function
+pixel_boxes = scale_points_to_pixels(result.points, width=width, height=height)
 
-# Option 2: call the convenience method on PerceiveResult
-pixel_space = result.points_to_pixels(width, height)
+# Option 2: convenience method on PerceiveResult
+pixel_boxes = result.points_to_pixels(width, height)
 
-for box in pixel_space or []:
-    print(box.mention, box.top_left.x, box.top_left.y, box.bottom_right.x, box.bottom_right.y)
+for box in pixel_boxes or []:
+    x1, y1 = box.top_left.x, box.top_left.y
+    x2, y2 = box.bottom_right.x, box.bottom_right.y
+    print(f"{box.mention}: [{x1}, {y1}, {x2}, {y2}]")
 ```
 
-Feed normalized coordinates back into the model for in-context learning; only scale when you need to render or compute metrics.
+### Composing tasks with the DSL
+For complex workflows, compose multimodal prompts with typed nodes and the `@perceive` decorator:
 
-### Using the DSL with `@perceive`
 ```python
 from perceptron import perceive, image, text
 
-@perceive(expects="box")
-def describe_landmark(path):
-    return image(path) + text("Highlight the main structures in one sentence.")
+@perceive(expects="box", stream=True)
+def find_safety_equipment(image_path):
+    return [
+        image(image_path),
+        text("Locate all safety equipment including helmets, vests, and signs")
+    ]
 
-result = describe_landmark("./landmark.jpg")
-print(result.text)
-for box in result.points or []:
-    print(box.mention, box)
+# Use the decorated function
+for event in find_safety_equipment("warehouse.jpg"):
+    if event["type"] == "final":
+        for box in event["result"]["points"]:
+            print(f"{box['mention']}: {box['top_left']}")
 
-# Inspect the compiled payload without executing the request
-print(describe_landmark.inspect("./landmark.jpg"))
+# Inspect compiled payload without executing
+payload = find_safety_equipment.inspect("warehouse.jpg")
+print(payload)
 ```
 
-Need something ad-hoc? Call `perceive` directly with DSL nodes (a sequence, a
-single node, or even a list/tuple of nodes):
-
-```python
-from perceptron import image, perceive, text
-
-result = perceive(image("./frame.png") + text("What's in this scene?"), expects="text")
-# Equivalent list-based form
-alt = perceive([image("./frame.png"), text("Where is the forklift?")], expects="box")
-```
-
-Set `stream=True` in the decorator to receive incremental events (`text.delta`, `points.delta`, `final`). Swap `expects` to `text`, `point`, or `polygon` when you need alternate structures.
-
----
+Available DSL nodes: `image`, `text`, `system`, `point`, `box`, `polygon`, `collection`
 
 ## Troubleshooting
-| Symptom | Likely Cause | Resolution |
+
+| Symptom | Likely cause | Resolution |
 | --- | --- | --- |
-| Compile-only result (no text) | Missing provider credentials | Export `FAL_KEY` / `PERCEPTRON_API_KEY` or call `configure(...)` |
-| `stream_buffer_overflow` warning | Long streaming responses exceeded buffer | Increase `max_buffer_bytes` via `configure` |
-| Empty JSON output in directory mode | No supported image extensions | Ensure files end with `.jpg`, `.png`, `.webp`, `.gif`, `.bmp`, `.tif`, `.tiff`, `.heic`, or `.heif` |
-| Bounding-box bounds errors | Inconsistent coordinates or missing `image=` anchors | Validate input annotations and ensure images are attached |
+| Compile-only result (no text) | Missing provider credentials | Export `PERCEPTRON_API_KEY` / `FAL_KEY` or call `configure(api_key=...)`. |
+| `stream_buffer_overflow` warning | Streaming responses exceeded buffer | Raise `max_buffer_bytes` via `configure(...)` or disable streaming. |
+| Empty detections in directory mode | No supported image extensions discovered | Limit inputs to `.jpg`, `.png`, `.webp`, `.gif`, `.bmp`, `.tif`, `.tiff`, `.heic`, `.heif`. |
+| Bounding-box coordinate errors | Inconsistent annotations or detached image payload | Validate annotation bounds and ensure each request attaches the relevant image. |
 
 ---
 
 ## Development
-- Install tooling: `python -m pip install -e .[dev]` (or `uv pip install --editable .[dev]`)
-- Enable git hooks: `pre-commit install`
-- Run all checks: `pre-commit run --all-files`
-- Run tests with coverage: `pytest` (prints a term summary and writes `coverage.xml`; generate HTML via `coverage html`)
-- Coverage is published from CI via Codecov using GitHub OIDC (no long-lived tokens). Install the Codecov GitHub App for this repo/org; private forks can export `CODECOV_TOKEN` to upload from their own CI runs.
 
-Repository layout
-- `src/perceptron` – core SDK and DSL
-- `tests` – high-level API and DSL tests
-- `papers` – publications and preprints (see `papers/isaac_01.pdf`)
+Clone the repo and install in editable mode with dev dependencies:
+
+```bash
+git clone https://github.com/perceptron-ai-inc/perceptron.git
+cd perceptron
+uv pip install -e ".[dev]"
+pre-commit install
+```
+
+**Run tests and checks:**
+```bash
+pytest                          # Run tests with coverage
+pre-commit run --all-files      # Run linters and formatters
+```
+
+**Repository structure:**
+- `src/perceptron/` – SDK core, client, DSL, providers
+- `tests/` – Test suite with coverage reporting
+- `cookbook/` – Example notebooks and scripts
+- `papers/` – Research publications
+- `tools/` – Development utilities
+
+Coverage reports are automatically published to Codecov via CI.
 
 ---
 
-## Paper
-- The Perceptron paper is included in this repository: [papers/isaac_01.pdf](papers/isaac_01.pdf).
+## Documentation & Support
+
+- **Full Documentation**: [docs.perceptron.inc](https://docs.perceptron.inc)
+- **Research Paper**: [papers/isaac_01.pdf](papers/isaac_01.pdf)
+- **Technical Support**: [support@perceptron.inc](mailto:support@perceptron.inc)
+- **Commercial Licensing**: [sales@perceptron.inc](mailto:sales@perceptron.inc)
+- **Careers**: [join-us@perceptron.inc](mailto:join-us@perceptron.inc)
 
 ---
 
 ## License
-Model weights are released under the Creative Commons Attribution-NonCommercial 4.0 International License. For commercial licensing, contact sales@perceptron.inc.
 
-## Contacts & Support
-- Technical: [support@perceptron.inc](mailto:support@perceptron.inc)
-- Commercial: [sales@perceptron.inc](mailto:sales@perceptron.inc)
-- Careers: [join-us@perceptron.inc](mailto:join-us@perceptron.inc)
+Model weights are released under the Creative Commons Attribution-NonCommercial 4.0 International License. For commercial licensing, contact [sales@perceptron.inc](mailto:sales@perceptron.inc).
